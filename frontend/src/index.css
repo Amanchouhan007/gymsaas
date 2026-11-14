@@ -1,0 +1,220 @@
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --primary-color: #ea580c;
+  --secondary-color: #c2410c;
+  --accent-color: #f97316;
+  --gold-accent: #f59e0b;
+  --dark-color: #120602;
+  --bg-offwhite: #f8fafc;
+  --header-bg: linear-gradient(135deg, #120602 0%, #1c0b05 50%, #271107 100%);
+  --sidebar-bg: linear-gradient(180deg, #120602 0%, #1a0a04 40%, #271107 100%);
+  --primary-gradient: linear-gradient(135deg, #ea580c 0%, #c2410c 100%);
+  --primary-gradient-hover: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  --glass-bg: rgba(28, 11, 5, 0.95);
+  --glass-border: rgba(234, 88, 12, 0.2);
+  --text-primary: #1e293b;
+  --text-muted: #64748b;
+  --border-radius-lg: 16px;
+  --border-radius-md: 12px;
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --theme-shadow: 0 10px 30px rgba(234, 88, 12, 0.15);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-tap-highlight-color: transparent;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+img, video, canvas, svg {
+  max-width: 100%;
+  height: auto;
+}
+
+button, a, input[type="button"], input[type="submit"], .btn {
+  touch-action: manipulation;
+}
+
+/* React datepicker fix */
+.react-datepicker-wrapper {
+  display: block;
+  width: 100%;
+}
+
+/* =============================================
+   Global Mobile Responsive Fixes (index.css)
+   ============================================= */
+
+/* Scrollable tabs globally - hide scrollbar but keep scroll */
+.nav-tabs, .nav-pills {
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  white-space: nowrap;
+}
+.nav-tabs::-webkit-scrollbar,
+.nav-pills::-webkit-scrollbar {
+  display: none;
+}
+
+/* All tables inside any container scroll horizontally */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+}
+
+/* =============================================
+   Mobile Responsive Date & Form Input Fixes
+   ============================================= */
+input[type="date"] {
+  min-height: 42px;
+  font-size: 15px;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+select.form-select {
+  min-height: 42px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+
+@media (max-width: 767.98px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="url"],
+  input[type="search"],
+  input[type="date"],
+  input[type="time"],
+  input[type="datetime-local"],
+  select.form-select,
+  textarea.form-control,
+  .form-control {
+    font-size: 16px !important;
+    min-height: 44px;
+  }
+  
+  button:not(.btn-close):not(.dropdown-toggle), 
+  .btn:not(.btn-close):not(.btn-sm) {
+    min-height: 44px;
+  }
+}
+
+/* =============================================
+   Phase 3: Global Component Patterns & Utilities
+   ============================================= */
+
+/* Responsive Grid for Stat Cards & KPI Tiles */
+.responsive-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+@media (max-width: 575.98px) {
+  .responsive-kpi-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
+/* Global Mobile Modal Sizing */
+@media (max-width: 575.98px) {
+  .modal-dialog {
+    margin: 8px !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+  .modal-content {
+    border-radius: 16px !important;
+    max-height: calc(100dvh - 32px) !important;
+    overflow-y: auto !important;
+  }
+  .modal-header, .modal-footer {
+    padding: 12px 16px !important;
+  }
+  .modal-body {
+    padding: 16px !important;
+  }
+}
+
+/* Table Stacked Card View for Mobile (<576px) */
+@media (max-width: 575.98px) {
+  .table-stacked-mobile table,
+  .table-stacked-mobile thead,
+  .table-stacked-mobile tbody,
+  .table-stacked-mobile th,
+  .table-stacked-mobile td,
+  .table-stacked-mobile tr {
+    display: block;
+  }
+
+  .table-stacked-mobile thead tr {
+    position: absolute;
+    top: -9999px;
+    left: -9999px;
+  }
+
+  .table-stacked-mobile tr {
+    margin-bottom: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 8px 12px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  }
+
+  .table-stacked-mobile td {
+    border: none;
+    border-bottom: 1px solid #f1f5f9;
+    position: relative;
+    padding-left: 45% !important;
+    text-align: right !important;
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .table-stacked-mobile td:last-child {
+    border-bottom: 0;
+  }
+
+  .table-stacked-mobile td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #64748b;
+    font-size: 0.8rem;
+    text-align: left;
+  }
+}
+
+/* Responsive Chart Container Wrapper */
+.chart-container-responsive {
+  position: relative;
+  width: 100%;
+  min-height: 250px;
+  max-height: 400px;
+}
+@media (max-width: 575.98px) {
+  .chart-container-responsive {
+    min-height: 220px;
+  }
+}
+
+

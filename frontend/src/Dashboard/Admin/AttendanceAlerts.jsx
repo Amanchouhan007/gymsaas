@@ -1,0 +1,665 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import BaseUrl from '../../Api/BaseUrl';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faExclamationTriangle, faEnvelope, faPhone, faUserShield, faSync, faDownload } from '@fortawesome/free-solid-svg-icons';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+import { exportToExcel, exportToPDF } from '../../utils/exportUtils';
+import { useTranslation } from 'react-i18next';
+
+const AttendanceAlerts = () => {
+  const { t } = useTranslation();
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Filter & Bulk Selection States
+  const [durationFilter, setDurationFilter] = useState('ALL'); // 'ALL' | 'GT_7' | 'GT_14' | 'GT_30' | 'CUSTOM'
+  const [customDaysMin, setCustomDaysMin] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  // Message Modal States
+  const [showMsgModal, setShowMsgModal] = useState(false);
+  const [isBulkModal, setIsBulkModal] = useState(false);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [msgTemplate, setMsgTemplate] = useState('template1');
+  const [customMsg, setCustomMsg] = useState('');
+  const [sendingMsg, setSendingMsg] = useState(false);
+  const [notifChannels, setNotifChannels] = useState(['IN_APP']); // Default: IN_APP (always works)
+  const [showWaBulkList, setShowWaBulkList] = useState(false);
+  const [sentWaIds, setSentWaIds] = useState([]);
+
+  const toggleChannel = (channelId) => {
+    if (notifChannels.includes(channelId)) {
+      if (notifChannels.length > 1) {
+        setNotifChannels(notifChannels.filter((c) => c !== channelId));
+      } else {
+        alert("Please select at least one communication channel.");
+      }
+    } else {
+      setNotifChannels([...notifChannels, channelId]);
+    }
+  };
+
+  const user = JSON.parse(localStorage.getItem('user')) || {};
+  const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+  const axiosConfig = { headers: { Authorization: `Bearer ${token}` } };
+
+  const templates = {
+    template1: "Hi {name}, we noticed you've been absent for {daysAbsent} days. We miss you at the gym!",
+    template2: "Hi {name}, consistency is key! Let us know if you need any help getting back on track.",
+    template3: "Hi {name}, your fitness journey is important to us. Hope to see you back soon!"
+  };
+
+  const fetchVulnerableMembers = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`${BaseUrl}alerts/vulnerable-members`, axiosConfig);
+      if (res.data.success) {
+        // Filter out Green members, we only care about Yellow and Red
+        const filtered = res.data.members.filter(m => m.badge !== 'Green');
+        setMembers(filtered);
+      }
+    } catch (err) {
+      console.error("Error fetching vulnerable members", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchVulnerableMembers();
+  }, []);
+
+  // Filter members by duration
+  const filteredMembers = members.filter((m) => {
+    const absent = m.daysAbsent || 0;
+    const attPct = m.attendancePercentage || 0;
+    if (durationFilter === "LT_90") return attPct < 90 || m.badge === "Blue";
+    if (durationFilter === "GT_3") return absent > 3;
+    if (durationFilter === "GT_7") return absent > 7;
+    if (durationFilter === "GT_14") return absent > 14;
+    if (durationFilter === "GT_30") return absent > 30;
+    if (durationFilter === "CUSTOM" && customDaysMin !== "")
+      return absent >= Number(customDaysMin);
+    return true;
+  });
+
+  const handleExportExcel = () => {
+    const dataToExport = filteredMembers.map((m) => ({
+      "Member Name": m.fullName || '—',
+      "Phone": m.phone || '—',
+      "Email": m.email || '—',
+      "Days Absent": m.daysAbsent ?? 'Never Attended',
+      "Attendance %": `${m.attendancePercentage}%`,
+      "Risk Badge": m.badge || '—',
+    }));
+    exportToExcel(dataToExport, "At-Risk Members", "At_Risk_Members");
+  };
+
+  const handleExportPDF = () => {
+    const columns = ["Member Name", "Phone", "Email", "Days Absent", "Attendance %", "Risk Badge"];
+    const rows = filteredMembers.map((m) => [
+      m.fullName || '—',
+      m.phone || '—',
+      m.email || '—',
+      m.daysAbsent ?? 'Never Attended',
+      `${m.attendancePercentage}%`,
+      m.badge || '—',
+    ]);
+    exportToPDF(rows, columns, "At-Risk Members Attendance Report", "At_Risk_Members");
+  };
+
+  const handleTemplateChange = (e) => {
+    const val = e.target.value;
+    setMsgTemplate(val);
+    if (val !== 'custom') {
+      setCustomMsg(templates[val]);
+    }
+  };
+
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedIds(members.map((m) => m.id));
+    } else {
+      setSelectedIds([]);
+    }
+  };
+
+  const handleSelectOne = (id) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter((item) => item !== id));
+    } else {
+      setSelectedIds([...selectedIds, id]);
+    }
+  };
+
+  const handleMessageClick = (member) => {
+    setSelectedMember(member);
+    setIsBulkModal(false);
+    setMsgTemplate('template1');
+    setCustomMsg(templates.template1);
+    setShowWaBulkList(false);
+    setSentWaIds([]);
+    setShowMsgModal(true);
+  };
+
+  const handleBulkMessageClick = () => {
+    if (selectedIds.length === 0) return alert("Please select at least one member.");
+    setIsBulkModal(true);
+    setSelectedMember(null);
+    setMsgTemplate('template1');
+    setCustomMsg(templates.template1);
+    setShowWaBulkList(false);
+    setSentWaIds([]);
+    setShowMsgModal(true);
+  };
+
+  const handleSendWaDirect = (member) => {
+    const phone = (member.phone || "").replace(/\D/g, "");
+    if (!phone) return alert(`⚠️ Member ${member.fullName} ka phone number nahi hai.`);
+    const personalizedMsg = customMsg
+      .replace(/{name}/g, member.fullName || "Member")
+      .replace(/{daysAbsent}/g, member.daysAbsent || "several");
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(personalizedMsg)}`, "_blank");
+    setSentWaIds(prev => [...new Set([...prev, member.id])]);
+  };
+
+  const handleLaunchAllWa = (targetMembers) => {
+    const waMembers = targetMembers.filter(m => m.phone);
+    if (waMembers.length === 0) {
+      alert("⚠️ Selected members ke paas phone number nahi hai.");
+      return;
+    }
+    waMembers.forEach((m, idx) => {
+      setTimeout(() => {
+        handleSendWaDirect(m);
+      }, idx * 450);
+    });
+  };
+
+  const sendNotification = async () => {
+    if (!customMsg.trim()) return alert("Message cannot be empty");
+    if (notifChannels.length === 0) return alert("Please select at least one communication channel.");
+
+    const includesWa = notifChannels.includes("WHATSAPP");
+
+    if (!isBulkModal && selectedMember) {
+      // ── Single Member Send ──
+      setSendingMsg(true);
+      const apiChannels = notifChannels.filter(c => c !== "WHATSAPP");
+      const results = [];
+
+      try {
+        for (const channel of apiChannels) {
+          // Personalize message for single member too
+          const personalizedMsg = customMsg
+            .replace(/{name}/g, selectedMember.fullName || 'Member')
+            .replace(/{daysAbsent}/g, selectedMember.daysAbsent || 'several');
+
+          let toValue = channel === "IN_APP" ? String(selectedMember.userId || selectedMember.id) : selectedMember.email;
+          if (!toValue) {
+            results.push(`${channel}: skipped (no target address)`);
+            continue;
+          }
+
+          try {
+            const res = await axios.post(`${BaseUrl}notif/send`, {
+              type: channel,
+              to: toValue,
+              message: personalizedMsg,
+              memberId: selectedMember.id,
+              subject: "Gym Management — We Miss You! 💪",
+            }, axiosConfig);
+
+            if (res.data?.skipped) {
+              results.push(`${channel}: skipped (${res.data.message || 'SMTP not configured'})`);
+            } else if (res.data?.success) {
+              results.push(`${channel}: ✅ sent`);
+            } else {
+              results.push(`${channel}: ⚠️ ${res.data?.message || 'unknown result'}`);
+            }
+          } catch (e) {
+            results.push(`${channel}: ❌ failed`);
+            console.error(`${channel} send error:`, e);
+          }
+        }
+
+        if (includesWa) {
+          handleSendWaDirect(selectedMember);
+          results.push(`WHATSAPP: 💬 opened`);
+        }
+
+        const inAppSent = results.some(r => r.startsWith('IN_APP') && r.includes('✅'));
+        const summary = results.join('\n');
+        alert(`Message to ${selectedMember.fullName}:\n${summary}${inAppSent ? '\n\n🔔 In-App notification delivered to member dashboard.' : ''}`);
+        setShowMsgModal(false);
+      } catch (err) {
+        console.error("Error sending single message", err);
+        alert("Notification attempted. Check console for details.");
+        setShowMsgModal(false);
+      } finally {
+        setSendingMsg(false);
+      }
+
+    } else {
+      // ── Bulk Members ──
+      const targetMembers = members.filter((m) => selectedIds.includes(m.id));
+      setSendingMsg(true);
+      let successCount = 0;
+      let skippedEmailCount = 0;
+
+      try {
+        const apiChannels = notifChannels.filter(c => c !== "WHATSAPP");
+        for (const m of targetMembers) {
+          const personalizedMsg = customMsg
+            .replace(/{name}/g, m.fullName || "Member")
+            .replace(/{daysAbsent}/g, m.daysAbsent || "several");
+
+          for (const channel of apiChannels) {
+            let toValue = channel === "IN_APP" ? String(m.userId || m.id) : m.email;
+            if (!toValue) continue;
+
+            try {
+              const res = await axios.post(`${BaseUrl}notif/send`, {
+                type: channel,
+                to: toValue,
+                message: personalizedMsg,
+                memberId: m.id,
+                subject: "Gym Management — We Miss You! 💪",
+              }, axiosConfig);
+              if (res.data?.skipped && channel === 'EMAIL') skippedEmailCount++;
+            } catch (e) {
+              console.error(`Bulk ${channel} to ${m.fullName} failed:`, e);
+            }
+          }
+          successCount++;
+        }
+
+        if (includesWa) {
+          setShowWaBulkList(true);
+          setSendingMsg(false);
+          handleLaunchAllWa(targetMembers);
+        } else {
+          const emailNote = skippedEmailCount > 0 ? `\n(${skippedEmailCount} email(s) skipped — SMTP not configured on server)` : '';
+          alert(`✅ Bulk messages dispatched to ${successCount}/${targetMembers.length} members!${emailNote}`);
+          setShowMsgModal(false);
+          setSelectedIds([]);
+        }
+      } catch (err) {
+        console.error("Bulk message error", err);
+        alert(`Messages dispatched to ${successCount} members.`);
+        setShowMsgModal(false);
+      } finally {
+        setSendingMsg(false);
+      }
+    }
+  };
+
+  return (
+    <div className="container-fluid p-4" style={{ backgroundColor: '#f8f9fa', minHeight: '100vh' }}>
+      <div className="d-flex flex-column flex-md-row justify-content-between align-items-center mb-4 gap-3">
+        <div>
+          <h2 className="mb-1 fw-bold text-dark d-flex align-items-center">
+            <FontAwesomeIcon icon={faExclamationTriangle} className="text-warning me-3" />
+            {t("atRisk.title", "At-Risk Members (Attendance)")}
+          </h2>
+          <p className="text-muted mb-0 fs-6">{t("atRisk.subtitle", "Monitor members with irregular attendance or prolonged absence to improve retention.")}</p>
+        </div>
+        <button className="btn btn-primary shadow-sm" onClick={fetchVulnerableMembers}>
+          <FontAwesomeIcon icon={faSync} className="me-2" /> {t("common.refresh", "Refresh")}
+        </button>
+      </div>
+
+      <div className="row mb-4">
+        <div className="col-md-4 mb-3">
+          <div className="card border-0 shadow-sm rounded-4 h-100 border-start border-danger border-4">
+            <div className="card-body p-4">
+              <h6 className="text-muted mb-2 fw-semibold text-uppercase">{t("atRisk.highRisk", "High Risk (Red Badge)")}</h6>
+              <h3 className="fw-bold text-dark mb-0">{members.filter(m => m.badge === 'Red').length} {t("nav.members", "Members")}</h3>
+              <p className="text-danger small mt-2 mb-0">&lt; 40% attendance or absent &gt; 15 days</p>
+            </div>
+          </div>
+        </div>
+        <div className="col-md-4 mb-3">
+          <div className="card border-0 shadow-sm rounded-4 h-100 border-start border-warning border-4">
+            <div className="card-body p-4">
+              <h6 className="text-muted mb-2 fw-semibold text-uppercase">{t("atRisk.irregular", "Irregular (Yellow Badge)")}</h6>
+              <h3 className="fw-bold text-dark mb-0">{members.filter(m => m.badge === 'Yellow').length} {t("nav.members", "Members")}</h3>
+              <p className="text-warning small mt-2 mb-0">40% - 75% attendance or absent &gt; 7 days</p>
+            </div>
+          </div>
+        </div>
+        <div className="col-md-4 mb-3">
+          <div className="card border-0 shadow-sm rounded-4 h-100 border-start border-info border-4">
+            <div className="card-body p-4">
+              <h6 className="text-muted mb-2 fw-semibold text-uppercase">{t("atRisk.moderateRisk", "Moderate Risk (Blue Badge)")}</h6>
+              <h3 className="fw-bold text-dark mb-0">{members.filter(m => m.badge === 'Blue').length} {t("nav.members", "Members")}</h3>
+              <p className="text-info small mt-2 mb-0">90% - 100% attendance or absent &gt; 3 days</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Duration Filter & Bulk Action Banner */}
+      <div className="card border-0 shadow-sm rounded-4 mb-4 p-3 bg-white d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
+        <div className="d-flex align-items-center gap-2 flex-wrap">
+          <span className="fw-semibold text-muted small me-1">{t("atRisk.filterDuration", "ABSENCE DURATION")}:</span>
+          {[
+            { label: 'All At-Risk', val: 'ALL' },
+            { label: '< 90% Attendance', val: 'LT_90' },
+            { label: 'Absent > 3 Days', val: 'GT_3' },
+            { label: 'Absent > 7 Days', val: 'GT_7' },
+            { label: 'Absent > 14 Days', val: 'GT_14' },
+            { label: 'Absent > 30 Days (High Risk)', val: 'GT_30' },
+          ].map(btn => (
+            <button
+              key={btn.val}
+              type="button"
+              className={`btn btn-sm ${durationFilter === btn.val ? 'btn-dark' : 'btn-outline-secondary'}`}
+              onClick={() => setDurationFilter(btn.val)}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="d-flex align-items-center gap-2 ms-auto ms-md-0">
+          {/* Export Data Dropdown */}
+          <div className="dropdown">
+            <button
+              className="btn btn-success btn-sm dropdown-toggle fw-semibold d-flex align-items-center gap-2"
+              type="button"
+              data-bs-toggle="dropdown"
+              aria-expanded="false"
+            >
+              <FontAwesomeIcon icon={faDownload} /> {t("atRisk.exportExcel", "Export Data")}
+            </button>
+            <ul className="dropdown-menu dropdown-menu-end shadow border-0">
+              <li>
+                <button className="dropdown-item d-flex align-items-center gap-2 text-success fw-medium" onClick={handleExportExcel}>
+                  <strong className="text-success">XLSX</strong> {t("atRisk.exportExcel", "Export to Excel")}
+                </button>
+              </li>
+              <li>
+                <button className="dropdown-item d-flex align-items-center gap-2 text-danger fw-medium" onClick={handleExportPDF}>
+                  <strong className="text-danger">PDF</strong> {t("atRisk.exportPdf", "Export to PDF")}
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          {selectedIds.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary shadow-sm fw-semibold"
+              onClick={handleBulkMessageClick}
+            >
+              <FontAwesomeIcon icon={faEnvelope} className="me-2" />
+              {t("atRisk.sendReminder", "Send Bulk Message")} ({selectedIds.length})
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="card border-0 shadow-sm rounded-4 overflow-hidden">
+        <div className="card-header bg-white border-bottom p-4 d-flex justify-content-between align-items-center">
+          <h5 className="mb-0 fw-bold text-dark">
+            {t("members.membersList", "Member List")} ({filteredMembers.length})
+          </h5>
+          <span className="text-muted small">{t("atRisk.selectBulkInfo", "Select checkboxes to message in bulk")}</span>
+        </div>
+        <div className="card-body p-0">
+          <div className="table-responsive">
+            <table className="table table-hover align-middle mb-0">
+              <thead className="table-light">
+                <tr>
+                  <th className="px-4 py-3" style={{ width: '40px' }}>
+                    <input
+                      type="checkbox"
+                      className="form-check-input"
+                      checked={
+                        filteredMembers.length > 0 &&
+                        selectedIds.length === filteredMembers.length
+                      }
+                      onChange={handleSelectAll}
+                    />
+                  </th>
+                  <th className="py-3">{t("common.name", "Member Name")}</th>
+                  <th className="py-3">{t("common.phone", "Contact")}</th>
+                  <th className="py-3">{t("atRisk.daysAbsent", "Days Absent")}</th>
+                  <th className="py-3">{t("atRisk.attendancePct", "30-Day Attendance %")}</th>
+                  <th className="py-3">{t("atRisk.riskBadge", "Status Badge")}</th>
+                  <th className="py-3 text-end px-4">{t("common.actions", "Actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan="7" className="text-center py-5">Loading members...</td></tr>
+                ) : filteredMembers.length > 0 ? (
+                  filteredMembers.sort((a, b) => b.daysAbsent - a.daysAbsent).map(member => (
+                    <tr key={member.id}>
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          className="form-check-input"
+                          checked={selectedIds.includes(member.id)}
+                          onChange={() => handleSelectOne(member.id)}
+                        />
+                      </td>
+                      <td className="py-3 fw-semibold text-dark">
+                        <div className="d-flex align-items-center">
+                          <div className="bg-light rounded-circle d-flex align-items-center justify-content-center me-3" style={{ width: '40px', height: '40px' }}>
+                            <FontAwesomeIcon icon={faUserShield} className="text-secondary" />
+                          </div>
+                          <div>
+                            {member.fullName}
+                            <span className="text-muted fs-6 d-block">ID: {member.id}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3 text-muted">
+                        <div>{member.phone}</div>
+                        <div className="small">{member.email}</div>
+                      </td>
+                      <td className="py-3 fw-bold">
+                        {member.daysAbsent === null ? 'Never Attended' : `${member.daysAbsent} Days`}
+                      </td>
+                      <td className="py-3">
+                        <div className="d-flex flex-column">
+                          <div className="d-flex align-items-center mb-1">
+                            <span className="me-2 fw-bold">{member.attendancePercentage}%</span>
+                            <div className="progress w-100" style={{ height: '6px' }}>
+                              <div className={`progress-bar ${member.badge === 'Red' ? 'bg-danger' : member.badge === 'Yellow' ? 'bg-warning' : 'bg-info'}`} role="progressbar" style={{ width: `${member.attendancePercentage}%` }}></div>
+                            </div>
+                          </div>
+                          <small className="text-muted" style={{ fontSize: '0.75rem' }}>
+                            Present: {member.presentDays ?? 0} / Absent: {member.absentDays ?? 0} / App: {member.totalApplicableDays ?? 0}
+                          </small>
+                        </div>
+                      </td>
+                      <td className="py-3">
+                        <span className={`badge rounded-pill ${member.badge === 'Red' ? 'bg-danger' : member.badge === 'Yellow' ? 'bg-warning text-dark' : 'bg-info text-dark'}`}>
+                          {member.badge}
+                        </span>
+                      </td>
+                      <td className="py-3 text-end px-4">
+                        <button className="btn btn-sm btn-light me-2 text-primary border shadow-sm" title="Send Message" onClick={() => handleMessageClick(member)}>
+                          <FontAwesomeIcon icon={faEnvelope} />
+                        </button>
+                        <a href={`tel:${member.phone}`} className="btn btn-sm btn-light me-2 text-success border shadow-sm" title="Call">
+                          <FontAwesomeIcon icon={faPhone} />
+                        </a>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="6" className="text-center py-5 text-muted">
+                      <p>Great job! No At-Risk members found.</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Message Modal */}
+      {showMsgModal && (isBulkModal || selectedMember) && (
+        <div className="modal d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050 }}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content border-0 shadow">
+              <div className="modal-header bg-primary text-white border-0">
+                <h5 className="modal-title d-flex align-items-center">
+                  <FontAwesomeIcon icon={faEnvelope} className="me-2 text-white" /> 
+                  {isBulkModal
+                    ? `Bulk Message (${selectedIds.length} Selected Members)`
+                    : `Message Member: ${selectedMember?.fullName}`}
+                </h5>
+                <button type="button" className="btn-close btn-close-white" onClick={() => setShowMsgModal(false)}></button>
+              </div>
+              <div className="modal-body p-4">
+                {showWaBulkList ? (
+                  <div>
+                    <div className="alert alert-success py-2 small mb-3 fw-semibold d-flex align-items-center justify-content-between">
+                      <span><FontAwesomeIcon icon={faEnvelope} className="me-2" /> ✅ Email & In-App dispatched! WhatsApp chats opened below:</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-success border-success ms-2 fw-semibold"
+                        onClick={() => handleLaunchAllWa(members.filter(m => selectedIds.includes(m.id)))}
+                      >
+                        🚀 Re-launch All
+                      </button>
+                    </div>
+
+                    <div className="list-group mb-3" style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                      {members.filter(m => selectedIds.includes(m.id)).map(m => {
+                        const isSent = sentWaIds.includes(m.id);
+                        return (
+                          <div key={m.id} className="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
+                            <div>
+                              <div className="fw-bold text-dark fs-6">{m.fullName}</div>
+                              <small className="text-muted">{m.phone || 'No Phone Number'}</small>
+                            </div>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${isSent ? 'btn-success bg-opacity-10 text-success border-success' : 'btn-success fw-semibold shadow-sm'}`}
+                              onClick={() => handleSendWaDirect(m)}
+                              disabled={!m.phone}
+                            >
+                              {isSent ? '✓ Sent' : '💬 Send WhatsApp'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <small className="text-muted d-block text-center mb-0">
+                      Click each member's button to open WhatsApp Web/App with their pre-filled message.
+                    </small>
+                  </div>
+                ) : (
+                  <>
+                    {/* Multi-Select Channel Switcher */}
+                    <div className="mb-3">
+                      <label className="form-label fw-semibold text-muted small text-uppercase d-flex justify-content-between">
+                        <span>Select Communication Channels (Multi-Select)</span>
+                        <span className="badge bg-light text-primary border">Select all that apply</span>
+                      </label>
+                      <div className="d-flex flex-wrap gap-2">
+                        {[
+                          { id: 'IN_APP', label: '🔔 In-App (Notification Bell)' },
+                          { id: 'EMAIL', label: '📧 Email (requires SMTP config)' },
+                        ].map((ch) => {
+                          const isSelected = notifChannels.includes(ch.id);
+                          return (
+                            <button
+                              key={ch.id}
+                              type="button"
+                              className={`btn btn-sm d-flex align-items-center gap-2 fw-semibold px-3 py-2 rounded-3 ${
+                                isSelected
+                                  ? 'btn-primary shadow-sm'
+                                  : 'btn-outline-secondary'
+                              }`}
+                              onClick={() => toggleChannel(ch.id)}
+                            >
+                              <input
+                                type="checkbox"
+                                className="form-check-input my-0"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                style={{ pointerEvents: 'none' }}
+                              />
+                              <span>{ch.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {notifChannels.includes('EMAIL') && (
+                        <div className="alert alert-warning py-2 mt-2 small mb-0">
+                          ⚠️ <strong>Email</strong> requires SMTP credentials to be set on the server. If not configured, email will be skipped but In-App will still be sent.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mb-3">
+                      <label className="form-label fw-semibold text-muted small text-uppercase">Select Template</label>
+                      <select className="form-select border-primary bg-light" value={msgTemplate} onChange={handleTemplateChange}>
+                        <option value="template1">Template 1: We miss you</option>
+                        <option value="template2">Template 2: Consistency is key</option>
+                        <option value="template3">Template 3: Hope to see you back</option>
+                        <option value="custom">Custom Message...</option>
+                      </select>
+                    </div>
+
+                    <div className="mb-3">
+                      <label className="form-label fw-semibold text-muted small text-uppercase">Message Content</label>
+                      <textarea 
+                        className="form-control" 
+                        rows="4" 
+                        value={customMsg}
+                        onChange={(e) => setCustomMsg(e.target.value)}
+                        placeholder="Type your message here..."
+                      ></textarea>
+                      <small className="text-muted mt-1 d-block">
+                        ✨ Tags <code>{'{name}'}</code> and <code>{'{daysAbsent}'}</code> will be dynamically personalized for each recipient.
+                      </small>
+                    </div>
+
+                    <div className="alert alert-info py-2 small mb-0 d-flex align-items-center">
+                      <FontAwesomeIcon icon={faEnvelope} className="me-2" />
+                      {isBulkModal
+                        ? `Will dispatch bulk personalized messages to ${selectedIds.length} members via ${notifChannels.join(" + ")}.`
+                        : `Will send via ${notifChannels.join(" + ")} to Member: ${selectedMember?.fullName}.`}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="modal-footer border-0 bg-light">
+                {showWaBulkList ? (
+                  <button type="button" className="btn btn-primary fw-semibold" onClick={() => { setShowMsgModal(false); setSelectedIds([]); }}>
+                    Done / Close
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="btn btn-secondary" onClick={() => setShowMsgModal(false)}>Cancel</button>
+                    <button type="button" className="btn btn-primary fw-semibold" onClick={sendNotification} disabled={sendingMsg}>
+                      {sendingMsg ? 'Sending...' : isBulkModal ? `Send to ${selectedIds.length} Members` : 'Send Message'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AttendanceAlerts;
+

@@ -1,0 +1,141 @@
+/* RTL (Right-to-Left) Styles for Arabic Language Support */
+
+[dir="rtl"] {
+  text-align: right;
+  direction: rtl;
+}
+
+[dir="rtl"] body {
+  text-align: right;
+  direction: rtl;
+}
+
+/* Navbar & Header Alignment */
+[dir="rtl"] .navbar-brand,
+[dir="rtl"] .me-auto {
+  margin-right: 0 !important;
+  margin-left: auto !important;
+}
+
+[dir="rtl"] .ms-auto {
+  margin-left: 0 !important;
+  margin-right: auto !important;
+}
+
+/* Sidebar Flip for RTL */
+[dir="rtl"] .sidebar {
+  right: 0 !important;
+  left: auto !important;
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+  border-right: none !important;
+}
+
+[dir="rtl"] .main-content,
+[dir="rtl"] .content-wrapper,
+[dir="rtl"] .page-wrapper {
+  margin-right: 250px !important;
+  margin-left: 0 !important;
+}
+
+[dir="rtl"] .sidebar.collapsed + .main-content,
+[dir="rtl"] .sidebar.collapsed + .page-wrapper,
+[dir="rtl"] body.sidebar-collapsed .main-content {
+  margin-right: 70px !important;
+  margin-left: 0 !important;
+}
+
+/* Form Controls & Input Groups */
+[dir="rtl"] .form-check {
+  padding-right: 1.5em;
+  padding-left: 0;
+}
+
+[dir="rtl"] .form-check .form-check-input {
+  float: right;
+  margin-right: -1.5em;
+  margin-left: 0;
+}
+
+[dir="rtl"] .input-group > :not(:first-child):not(.dropdown-menu):not(.valid-tooltip):not(.valid-feedback):not(.invalid-tooltip):not(.invalid-feedback) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: 0.375rem;
+  border-bottom-left-radius: 0.375rem;
+}
+
+[dir="rtl"] .input-group > :not(:last-child):not(.dropdown-toggle):not(.dropdown-menu):not(.form-floating) {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: 0.375rem;
+  border-bottom-right-radius: 0.375rem;
+}
+
+/* Dropdown Menu Positioning */
+[dir="rtl"] .dropdown-menu {
+  text-align: right;
+}
+
+[dir="rtl"] .dropdown-menu-end {
+  right: auto !important;
+  left: 0 !important;
+}
+
+/* Modal Close Button */
+[dir="rtl"] .modal-header .btn-close {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+/* Tables */
+[dir="rtl"] .table th,
+[dir="rtl"] .table td {
+  text-align: right;
+}
+
+/* Badges & Icons Spacing */
+[dir="rtl"] .me-1, [dir="rtl"] .me-2, [dir="rtl"] .me-3 {
+  margin-left: 0.25rem !important;
+  margin-right: 0 !important;
+}
+
+[dir="rtl"] .ms-1, [dir="rtl"] .ms-2, [dir="rtl"] .ms-3 {
+  margin-right: 0.25rem !important;
+  margin-left: 0 !important;
+}
+
+/* Sidebar Container Flip for RTL */
+[dir="rtl"] .sidebar-container {
+  right: 0 !important;
+  left: auto !important;
+  border-left: 1px solid rgba(234, 88, 12, 0.15);
+  border-right: none !important;
+}
+
+[dir="rtl"] .right-side-content {
+  margin-right: 250px !important;
+  margin-left: 0 !important;
+}
+
+@media (min-width: 992px) {
+  [dir="rtl"] .right-side-content.collapsed {
+    margin-right: 80px !important;
+    margin-left: 0 !important;
+  }
+}
+
+/* Responsive Overrides for RTL */
+@media (max-width: 991.98px) {
+  [dir="rtl"] .sidebar-container {
+    transform: translateX(0) !important;
+  }
+  [dir="rtl"] .sidebar-container.collapsed {
+    transform: translateX(100%) !important;
+  }
+  [dir="rtl"] .right-side-content,
+  [dir="rtl"] .right-side-content.collapsed,
+  [dir="rtl"] .main-content,
+  [dir="rtl"] .page-wrapper {
+    margin-right: 0 !important;
+    margin-left: 0 !important;
+  }
+}

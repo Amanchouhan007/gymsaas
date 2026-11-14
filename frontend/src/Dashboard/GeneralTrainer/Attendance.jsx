@@ -1,0 +1,616 @@
+import React, { useState, useEffect } from "react";
+import { Form, Button, Table, Modal, Row, Col, Card, Spinner, Alert, Dropdown } from "react-bootstrap";
+import { FaEye, FaTrash, FaTimesCircle, FaDownload } from "react-icons/fa";
+import { useTranslation } from "react-i18next";
+import axiosInstance from "../../Api/axiosInstance";
+import BaseUrl from '../../Api/BaseUrl';
+import * as XLSX from 'xlsx';
+import { exportToPDF } from '../../utils/exportUtils';
+
+const Attendance = () => {
+  const { t } = useTranslation();
+  const [search, setSearch] = useState("");
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewMember, setViewMember] = useState(null);
+  const [filters, setFilters] = useState({
+    memberId: "",
+    memberName: "",
+  });
+  const [activeFilters, setActiveFilters] = useState({
+    memberId: "",
+    memberName: "",
+  });
+  const [attendance, setAttendance] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [renderError, setRenderError] = useState(null);
+
+  // Get user data from localStorage
+  const userData = JSON.parse(localStorage.getItem('user') || '{}');
+  const memberId = userData.id;
+  const branchId = userData.branchId || 1;
+
+  // Fetch attendance data
+  useEffect(() => {
+    fetchAttendanceData();
+  }, [memberId, branchId]);
+
+  // Function to fetch attendance data
+  const fetchAttendanceData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const response = await axiosInstance.get(`memberattendence/${memberId}`);
+      const data = response.data;
+      
+      console.log('API Response:', data);
+      
+      if (data.success && data.attendance) {
+        // Transform API response to match expected format
+        const transformedAttendance = data.attendance.map(entry => {
+          // Calculate work hours
+          const checkInTime = entry.checkIn ? new Date(entry.checkIn) : null;
+          const checkOutTime = entry.checkOut ? new Date(entry.checkOut) : null;
+          let workHours = "—";
+          
+          if (checkInTime && checkOutTime && !isNaN(checkInTime.getTime()) && !isNaN(checkOutTime.getTime())) {
+            const diffMs = checkOutTime - checkInTime;
+            if (diffMs > 0) {
+              const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+              const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+              workHours = `${diffHours}h ${diffMinutes}m`;
+            }
+          }
+          
+          return {
+            attendance_id: entry.id,
+            member_id: entry.memberId || entry.staffId || "N/A",
+            staff_id: entry.staffId,
+            name: entry.fullName || (entry.memberId ? `Member ID: ${entry.memberId}` : `Staff ID: ${entry.staffId}`),
+            rawCheckIn: entry.checkIn,
+            rawCheckOut: entry.checkOut,
+            status: entry.computedStatus === 'Active' ? 'Present' : 
+                    entry.computedStatus === 'Completed' ? 'Present' : 'Absent',
+            checkin_time: entry.checkIn ? new Date(entry.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—",
+            checkout_time: entry.checkOut ? new Date(entry.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "—",
+            mode: entry.mode,
+            notes: entry.notes,
+            computedStatus: entry.computedStatus,
+            checkedOut: entry.checkOut ? true : false,
+            workHours: workHours
+          };
+        });
+        
+        setAttendance(transformedAttendance);
+      } else {
+        // If there's no data or an error, set empty array
+        setAttendance([]);
+      }
+    } catch (err) {
+      console.error('Error fetching attendance data:', err);
+      setError(`Error fetching data: ${err.message}`);
+      setAttendance([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Safe mapping helper to catch render errors early
+  let safeFiltered = [];
+  try {
+    safeFiltered = attendance.filter((m) => {
+      return (
+        (activeFilters.memberId
+          ? String(m.member_id || "").includes(activeFilters.memberId)
+          : true) &&
+        (activeFilters.memberName
+          ? String(m.name || "").toLowerCase().includes(activeFilters.memberName.toLowerCase())
+          : true) &&
+        (search ? String(m.name || "").toLowerCase().includes(search.toLowerCase()) : true)
+      );
+    });
+  } catch (err) {
+    if (!renderError) setRenderError(err.message);
+  }
+
+  // Delete member via API
+  const handleDelete = async (id) => {
+    if (window.confirm("Are you sure you want to delete this record?")) {
+      try {
+        // Show loading state for specific member
+        setAttendance(attendance.map(member => 
+          member.attendance_id === id 
+            ? { ...member, deleting: true }
+            : member
+        ));
+
+        const response = await axiosInstance.delete(`memberattendence/delete/${id}`);
+        const data = response.data;
+        
+        if (data.success) {
+          // Refresh attendance data after successful deletion
+          fetchAttendanceData();
+          alert('Record deleted successfully!');
+        } else {
+          alert(data.message || 'Delete failed');
+          // Remove loading state
+          setAttendance(attendance.map(member => 
+            member.attendance_id === id 
+              ? { ...member, deleting: false }
+              : member
+          ));
+        }
+      } catch (err) {
+        console.error('Error during deletion:', err);
+        alert(`Error during deletion: ${err.message}`);
+        // Remove loading state
+        setAttendance(attendance.map(member => 
+          member.attendance_id === id 
+            ? { ...member, deleting: false }
+            : member
+        ));
+      }
+    }
+  };
+
+  // Check out member via API
+  const handleCheckout = async (id) => {
+    try {
+      // Show loading state for specific member
+      setAttendance(attendance.map(member => 
+        member.attendance_id === id 
+          ? { ...member, checkingOut: true }
+          : member
+      ));
+
+      const response = await axiosInstance.put(`memberattendence/checkout/${id}`);
+      const data = response.data;
+      
+      if (data.success) {
+        await fetchAttendanceData();
+        alert('Check-out successful!');
+      } else {
+        alert(data.message || 'Check-out failed');
+        // Remove loading state
+        setAttendance(attendance.map(member => 
+          member.attendance_id === id 
+            ? { ...member, checkingOut: false }
+            : member
+        ));
+      }
+    } catch (err) {
+      console.error('Error during checkout:', err);
+      alert(`Error during check-out: ${err.message}`);
+      // Remove loading state
+      setAttendance(attendance.map(member => 
+        member.attendance_id === id 
+          ? { ...member, checkingOut: false }
+          : member
+      ));
+    }
+  };
+
+  const filteredAttendance = safeFiltered;
+
+  const handleApplyFilter = () => {
+    setActiveFilters({
+      memberId: filters.memberId,
+      memberName: filters.memberName
+    });
+  };
+
+  const handleExport = () => {
+    if (filteredAttendance.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+    
+    // Prepare data for export
+    const exportData = filteredAttendance.map(item => ({
+      "Attendance ID": item.attendance_id,
+      "Member ID": item.member_id,
+      "Name": item.name,
+      "Check-In": item.checkin_time || "--",
+      "Check-Out": item.checkout_time || "--",
+      "Work Hours": item.workHours || "--",
+      "Mode": item.mode || "N/A",
+      "Notes": item.notes || ""
+    }));
+
+    // Create workbook and worksheet
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+
+    // Download file
+    XLSX.writeFile(workbook, `Attendance_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const handleExportPDF = () => {
+    if (filteredAttendance.length === 0) {
+      alert("No data available to export.");
+      return;
+    }
+    
+    const header = ["Attendance ID", "Member ID", "Name", "Check-In", "Check-Out", "Work Hours", "Mode", "Notes"];
+    const rows = filteredAttendance.map(item => [
+      item.attendance_id,
+      item.member_id,
+      item.name,
+      item.checkin_time || "--",
+      item.checkout_time || "--",
+      item.workHours || "--",
+      item.mode || "N/A",
+      item.notes || ""
+    ]);
+
+    exportToPDF(
+      rows,
+      header,
+      "General Trainer Attendance Report",
+      `Attendance_Report_${new Date().toISOString().split('T')[0]}`
+    );
+  };
+
+  return (
+    <div className="p-3 p-md-4 bg-white rounded shadow">
+      <h2 className="mb-2 mb-md-3 fw-bold" style={{ color: '#ea580c' }}>{t('attendance.managementTitle', 'Attendance Management')}</h2>
+      <p className="text-muted mb-3 mb-md-4">
+        {t('attendance.managementSubtitle', 'Manage and track attendance records for gym members.')}
+      </p>
+
+      {/* Error message */}
+      {(error || renderError) && (
+        <Alert variant="danger" className="mb-4">
+          {error || `Render Error: ${renderError}`}
+        </Alert>
+      )}
+
+      {/* Loading state */}
+      {loading ? (
+        <div className="text-center py-5">
+          <Spinner animation="border" role="status">
+            <span className="visually-hidden">{t('common.loading', 'Loading...')}</span>
+          </Spinner>
+        </div>
+      ) : (
+        <>
+          {/* Filters Row */}
+          <Row className="mb-4 g-2 g-md-3">
+            <Col xs={12} sm={6} md={4}>
+              <Form.Control
+                type="text"
+                placeholder={t('attendance.filterByMemberId', 'Filter by Member ID')}
+                value={filters.memberId}
+                onChange={(e) =>
+                  setFilters({ ...filters, memberId: e.target.value })
+                }
+              />
+            </Col>
+            <Col xs={12} sm={6} md={4}>
+              <Form.Control
+                type="text"
+                placeholder={t('attendance.filterByMemberName', 'Filter by Member Name')}
+                value={filters.memberName}
+                onChange={(e) =>
+                  setFilters({ ...filters, memberName: e.target.value })
+                }
+              />
+            </Col>
+            <Col xs={12} sm={6} md={4} className="d-flex justify-content-start justify-content-md-end">
+              <Button variant="outline-secondary me-2" onClick={handleApplyFilter}>{t('common.filter', 'Filter')}</Button>
+              <Dropdown className="w-100 w-md-auto">
+                <Dropdown.Toggle variant="outline-secondary" className="w-100 d-flex align-items-center justify-content-center gap-2">
+                  <FaDownload /> {t('common.export', 'Export')}
+                </Dropdown.Toggle>
+                <Dropdown.Menu className="shadow-sm border-0">
+                  <Dropdown.Item onClick={handleExport} className="text-success fw-medium">
+                    <strong>CSV</strong> {t('common.exportCsv', 'Export to CSV')}
+                  </Dropdown.Item>
+                  <Dropdown.Item onClick={handleExportPDF} className="text-danger fw-medium">
+                    <strong>PDF</strong> {t('common.exportPdf', 'Export to PDF')}
+                  </Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
+            </Col>
+          </Row>
+
+          {/* Desktop Table View */}
+          <div className="table-responsive d-none d-md-block">
+            <Table bordered hover responsive className="align-middle">
+              <thead style={{ backgroundColor: "#f8f9fa" }}>
+                <tr>
+                  <th>{t('attendance.attendanceId', 'Attendance ID')}</th>
+                  <th>{t('attendance.checkIn', 'Check-in')}</th>
+                  <th>{t('attendance.checkOut', 'Check-out')}</th>
+                  <th>{t('attendance.workHours', 'Work Hours')}</th>
+                  <th>{t('common.mode', 'Mode')}</th>
+                  <th>{t('common.notes', 'Notes')}</th>
+                  <th>{t('common.actions', 'Actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAttendance.length === 0 ? (
+                  <tr>
+                    <td colSpan="9" className="text-center text-muted">{t('attendance.noRecords', 'No attendance records found')}</td>
+                  </tr>
+                ) : (
+                  filteredAttendance.map((member) => (
+                    <tr key={member.attendance_id}>
+                      <td>{member.attendance_id}</td>
+                      <td>{member.checkin_time || "--"}</td>
+                      <td>{member.checkout_time || "--"}</td>
+                      <td>{member.workHours}</td>
+                      <td>
+                        <Form.Select
+                          size="sm"
+                          value={member.mode || ""}
+                          onChange={(e) => {
+                            setAttendance(attendance.map(m =>
+                              m.attendance_id === member.attendance_id
+                                ? { ...m, mode: e.target.value }
+                                : m
+                            ));
+                          }}
+                        >
+                          <option value="">-------Select-------</option>
+                          <option value="QR">QR</option>
+                          <option value="Manual">Manual</option>
+                          <option value="App">App</option>
+                        </Form.Select>
+                      </td>
+                      <td>
+                        <Form.Control
+                          type="text"
+                          size="sm"
+                          value={member.notes || ""}
+                          onChange={(e) => {
+                            setAttendance(attendance.map(m => 
+                              m.attendance_id === member.attendance_id 
+                                ? { ...m, notes: e.target.value } 
+                                : m
+                            ));
+                          }}
+                        />
+                      </td>
+                      <td>
+                        <div className="d-flex gap-2">
+                          <Button
+                            variant="outline-dark"
+                            size="sm"
+                            onClick={() => {
+                              setViewMember(member);
+                              setShowViewModal(true);
+                            }}
+                          >
+                            <FaEye />
+                          </Button>
+                          {/* Checkout button - show only if checked in and not checked out */}
+                          {member.checkin_time === "-" ? (
+                            <Button
+                              variant="outline-secondary"
+                              size="sm"
+                              disabled
+                            >
+                              <span className="ms-1">Not Checked In</span>
+                            </Button>
+                          ) : !member.checkedOut ? (
+                            <Button
+                              variant="outline-success"
+                              size="sm"
+                              onClick={() => handleCheckout(member.attendance_id)}
+                              disabled={member.checkingOut}
+                            >
+                              {member.checkingOut ? (
+                                <>
+                                  <Spinner as="span" animation="border" size="sm" />
+                                  <span className="ms-1">Checking out...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FaTimesCircle />
+                                  <span className="ms-1">Check-out</span>
+                                </>
+                              )}
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline-secondary"
+                              size="sm"
+                              disabled
+                            >
+                              <span className="ms-1">Checked Out</span>
+                            </Button>
+                          )}
+                          <Button
+                            variant="outline-danger"
+                            size="sm"
+                            onClick={() => handleDelete(member.attendance_id)}
+                            disabled={member.deleting || member.checkin_time === "-"}
+                          >
+                            {member.deleting ? (
+                              <Spinner as="span" animation="border" size="sm" />
+                            ) : (
+                              <FaTrash />
+                            )}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </Table>
+          </div>
+
+          {/* Mobile Card View */}
+          <div className="d-md-none">
+            {filteredAttendance.length === 0 ? (
+              <div className="text-center py-5 text-muted">No attendance records found</div>
+            ) : (
+              filteredAttendance.map((member) => (
+                <Card key={member.attendance_id} className="mb-3">
+                  <Card.Header className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <strong>{member.name}</strong>
+                      <div className="text-muted small">ID: {member.member_id}</div>
+                    </div>
+                  </Card.Header>
+                  <Card.Body>
+                    <Row className="mb-2">
+                      <Col xs={6}>
+                        <small className="text-muted">Check-in:</small>
+                        <div>{member.checkin_time || "--"}</div>
+                      </Col>
+                      <Col xs={6}>
+                        <small className="text-muted">Check-out:</small>
+                        <div>{member.checkout_time || "--"}</div>
+                      </Col>
+                    </Row>
+                    
+                    <Row className="mb-2">
+                      <Col xs={6}>
+                        <small className="text-muted">Work Hours:</small>
+                        <div>{member.workHours}</div>
+                      </Col>
+                      <Col xs={6}>
+                        <small className="text-muted">Mode:</small>
+                        <Form.Select
+                          size="sm"
+                          value={member.mode || ""}
+                          onChange={(e) => {
+                            setAttendance(attendance.map(m =>
+                              m.attendance_id === member.attendance_id
+                                ? { ...m, mode: e.target.value }
+                                : m
+                            ));
+                          }}
+                          className="mt-1"
+                        >
+                          <option value="">--Select--</option>
+                          <option value="QR">QR</option>
+                          <option value="Manual">Manual</option>
+                          <option value="App">App</option>
+                        </Form.Select>
+                      </Col>
+                    </Row>
+                    
+                    <Row className="mb-2">
+                      <Col xs={12}>
+                        <small className="text-muted">Notes:</small>
+                        <Form.Control
+                          type="text"
+                          size="sm"
+                          value={member.notes || ""}
+                          onChange={(e) => {
+                            setAttendance(attendance.map(m => 
+                              m.attendance_id === member.attendance_id 
+                                ? { ...m, notes: e.target.value } 
+                                : m
+                            ));
+                          }}
+                          className="mt-1"
+                        />
+                      </Col>
+                    </Row>
+                    
+                    <div className="d-flex gap-2 mt-3">
+                      <Button
+                        variant="outline-dark"
+                        size="sm"
+                        onClick={() => {
+                          setViewMember(member);
+                          setShowViewModal(true);
+                        }}
+                      >
+                        <FaEye />
+                      </Button>
+                       {/* Checkout button - show only if checked in and not checked out */}
+                      {member.checkin_time === "-" ? (
+                        <Button
+                          variant="outline-secondary"
+                          size="sm"
+                          disabled
+                        >
+                          <span className="ms-1">Not Checked In</span>
+                        </Button>
+                      ) : !member.checkedOut ? (
+                        <Button
+                          variant="outline-success"
+                          size="sm"
+                          onClick={() => handleCheckout(member.attendance_id)}
+                          disabled={member.checkingOut}
+                        >
+                          {member.checkingOut ? (
+                            <>
+                              <Spinner as="span" animation="border" size="sm" />
+                              <span className="ms-1">Checking out...</span>
+                            </>
+                          ) : (
+                            <>
+                              <FaTimesCircle />
+                              <span className="ms-1">Check-out</span>
+                            </>
+                          )}
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline-secondary"
+                          size="sm"
+                          disabled
+                        >
+                          <span className="ms-1">Checked Out</span>
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline-danger"
+                        size="sm"
+                        onClick={() => handleDelete(member.attendance_id)}
+                        disabled={member.deleting || member.checkin_time === "-"}
+                      >
+                        {member.deleting ? (
+                          <Spinner as="span" animation="border" size="sm" />
+                        ) : (
+                          <FaTrash />
+                        )}
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              ))
+            )}
+          </div>
+        </>
+      )}          
+
+      {/* View Modal */}
+      <Modal
+        show={showViewModal}
+        onHide={() => setShowViewModal(false)}
+        centered
+        size="md"
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>Attendance Details</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {viewMember && (
+            <>
+              <p><b>Attendance ID:</b> {viewMember.attendance_id}</p>
+              <p><b>Member ID:</b> {viewMember.member_id}</p>
+              <p><b>Name:</b> {viewMember.name}</p>
+              <p><b>Check-in:</b> {viewMember.checkin_time || "--"}</p>
+              <p><b>Check-out:</b> {viewMember.checkout_time || "--"}</p>
+              <p><b>Work Hours:</b> {viewMember.workHours || "--"}</p>
+              <p><b>Mode:</b> {viewMember.mode || "--"}</p>
+              <p><b>Notes:</b> {viewMember.notes || "--"}</p>
+            </>
+          )}
+        </Modal.Body>
+      </Modal>
+    </div>
+  );
+};
+
+export default Attendance;

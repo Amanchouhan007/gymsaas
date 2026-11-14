@@ -1,0 +1,989 @@
+import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { FaMoneyBillWave, FaReceipt, FaCheck, FaUndo, FaEye, FaFileCsv, FaFilePdf, FaCalendarAlt, FaSearch, FaFilter, FaTags, FaDownload } from 'react-icons/fa';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import axiosInstance from '../../Api/axiosInstance';
+
+const ReceptionistPaymentCollection = () => {
+  const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState('payment'); // 'payment', 'attendance', 'plans'
+  const [loading, setLoading] = useState(false);
+  const [adminId, setAdminId] = useState(null);
+  const [branchId, setBranchId] = useState(null);
+  
+  // Real Data States
+  const [payments, setPayments] = useState([]);
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
+  const [plans, setPlans] = useState([]);
+  const [members, setMembers] = useState([]);
+  
+  // Payment Collection State
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentModalType, setPaymentModalType] = useState('view'); // 'view', 'add'
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [newPayment, setNewPayment] = useState({
+    memberId: "",
+    planId: "",
+    amount: "",
+    paymentMode: "Cash", // Changed default to Cash
+    status: "Pending",
+    trainerName: ""
+  });
+  
+  // Attendance Report State
+  const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
+  const [attendanceModalType, setAttendanceModalType] = useState('view'); // 'view', 'filter'
+  const [selectedAttendance, setSelectedAttendance] = useState(null);
+  
+  // Pagination states
+  const [paymentEntriesPerPage, setPaymentEntriesPerPage] = useState(10);
+  const [paymentCurrentPage, setPaymentCurrentPage] = useState(1);
+  const [attendanceEntriesPerPage, setAttendanceEntriesPerPage] = useState(10);
+  const [attendanceCurrentPage, setAttendanceCurrentPage] = useState(1);
+  
+  // Filter States for Payment & Attendance
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All"); // "All" or "Pending"
+  
+  // Get User Details
+  useEffect(() => {
+    try {
+      const userStr = localStorage.getItem("user");
+      if (userStr) {
+        const userObj = JSON.parse(userStr);
+        setAdminId(userObj.adminId || userObj.id);
+        setBranchId(userObj.branchId || "all");
+      }
+    } catch(e) {}
+  }, []);
+
+  // Fetch Data Based on Active Tab
+  useEffect(() => {
+    if(!adminId) return;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        console.log("fetchData: activeTab =", activeTab, "adminId =", adminId, "branchId =", branchId);
+        if (activeTab === 'payment') {
+          // Fetch Payments
+          const res = await axiosInstance.get(`/payments/branch/${branchId}?adminId=${adminId}`);
+          if(res.data.success) setPayments(res.data.payments || res.data.data || []);
+          
+          // Fetch Members (for dropdown)
+          const memRes = await axiosInstance.get(`/members/admin/${adminId}`);
+          if(memRes.data.success) setMembers(memRes.data.members || memRes.data.data || []);
+          
+          // Fetch Plans (for dropdown)
+          const planRes = await axiosInstance.get(`MemberPlan?adminId=${adminId}`);
+          if(planRes.data.success) setPlans(planRes.data.plans || planRes.data.data || []);
+          
+        } else if (activeTab === 'attendance') {
+          // Fetch Attendance
+          const res = await axiosInstance.get(`/memberattendence/admin?adminId=${adminId}&category=member`);
+          if(res.data.success) setAttendanceRecords(res.data.attendance || res.data.data || []);
+          
+        } else if (activeTab === 'plans') {
+          // Fetch Plans View
+          const planRes = await axiosInstance.get(`MemberPlan?adminId=${adminId}`);
+          if(planRes.data.success) setPlans(planRes.data.plans || planRes.data.data || []);
+        }
+      } catch (err) {
+        console.error("Error fetching data inside ReceptionistPaymentCollection:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [activeTab, adminId, branchId]);
+
+  // Apply filters locally
+  const filteredPayments = payments.filter(p => {
+    let match = true;
+    if (searchQuery) match = match && (p.memberName?.toLowerCase().includes(searchQuery.toLowerCase()) || p.invoiceNo?.toLowerCase().includes(searchQuery.toLowerCase()));
+    if (fromDate) match = match && new Date(p.paymentDate) >= new Date(fromDate);
+    if (toDate) {
+      const to = new Date(toDate);
+      to.setHours(23, 59, 59, 999);
+      match = match && new Date(p.paymentDate) <= to;
+    }
+    if (statusFilter !== "All") {
+      match = match && p.status === statusFilter;
+    }
+    return match;
+  });
+
+  const filteredAttendance = attendanceRecords.filter(a => {
+    let match = true;
+    if (searchQuery) match = match && a.name?.toLowerCase().includes(searchQuery.toLowerCase());
+    if (fromDate) match = match && new Date(a.checkIn || a.date) >= new Date(fromDate);
+    if (toDate) {
+      const to = new Date(toDate);
+      to.setHours(23, 59, 59, 999);
+      match = match && new Date(a.checkIn || a.date) <= to;
+    }
+    return match;
+  });
+
+  // Payment pagination logic
+  const paymentIndexOfLastEntry = paymentCurrentPage * paymentEntriesPerPage;
+  const paymentIndexOfFirstEntry = paymentIndexOfLastEntry - paymentEntriesPerPage;
+  const currentPayments = filteredPayments.slice(paymentIndexOfFirstEntry, paymentIndexOfLastEntry);
+  const paymentTotalPages = Math.max(1, Math.ceil(filteredPayments.length / paymentEntriesPerPage));
+  
+  // Attendance pagination logic
+  const attendanceIndexOfLastEntry = attendanceCurrentPage * attendanceEntriesPerPage;
+  const attendanceIndexOfFirstEntry = attendanceIndexOfLastEntry - attendanceEntriesPerPage;
+  const currentAttendanceRecords = filteredAttendance.slice(attendanceIndexOfFirstEntry, attendanceIndexOfLastEntry);
+  const attendanceTotalPages = Math.max(1, Math.ceil(filteredAttendance.length / attendanceEntriesPerPage));
+  
+  const handlePaymentEntriesChange = (e) => {
+    setPaymentEntriesPerPage(parseInt(e.target.value));
+    setPaymentCurrentPage(1);
+  };
+  
+  const handleAttendanceEntriesChange = (e) => {
+    setAttendanceEntriesPerPage(parseInt(e.target.value));
+    setAttendanceCurrentPage(1);
+  };
+  
+  const paymentPaginate = (pageNumber) => setPaymentCurrentPage(pageNumber);
+  const attendancePaginate = (pageNumber) => setAttendanceCurrentPage(pageNumber);
+  
+  const paymentNextPage = () => { if (paymentCurrentPage < paymentTotalPages) setPaymentCurrentPage(prev => prev + 1); };
+  const paymentPrevPage = () => { if (paymentCurrentPage > 1) setPaymentCurrentPage(prev => prev - 1); };
+  
+  const attendanceNextPage = () => { if (attendanceCurrentPage < attendanceTotalPages) setAttendanceCurrentPage(prev => prev + 1); };
+  const attendancePrevPage = () => { if (attendanceCurrentPage > 1) setAttendanceCurrentPage(prev => prev - 1); };
+
+  // Payment Handlers
+  const [memberType, setMemberType] = useState('existing');
+  const [selectedMemberDetails, setSelectedMemberDetails] = useState(null);
+
+  const handleAddPayment = async () => {
+    setPaymentModalType('add');
+    setSelectedPayment(null);
+    setNewPayment({ memberId: "", planId: "", amount: "", paymentMode: "Cash", status: "Paid" });
+    setSelectedMemberDetails(null);
+    setMemberType('existing');
+    setIsPaymentModalOpen(true);
+
+    if (adminId) {
+      try {
+        const memRes = await axiosInstance.get(`/members/admin/${adminId}`);
+        if (memRes.data.success) setMembers(memRes.data.data || memRes.data.members || []);
+
+        const planRes = await axiosInstance.get(`MemberPlan?adminId=${adminId}`);
+        if (planRes.data.success) setPlans(planRes.data.data || planRes.data.plans || []);
+      } catch (err) {
+        console.error("Error fetching modal dropdown data:", err);
+      }
+    }
+  };
+
+  const handleViewPayment = (payment) => {
+    setPaymentModalType('view');
+    setSelectedPayment(payment);
+    setIsPaymentModalOpen(true);
+  };
+
+  const submitNewPayment = async (e) => {
+    e.preventDefault();
+    try {
+      const userStr = localStorage.getItem("user");
+      const userObj = userStr ? JSON.parse(userStr) : {};
+
+      const payload = {
+        memberId: newPayment.memberId,
+        planId: newPayment.planId,
+        amount: newPayment.amount,
+        paymentMode: newPayment.paymentMode,
+        trainerName: newPayment.trainerName,
+        collectedByName: userObj?.fullName || "Sales Agent",
+        collectedByRole: userObj?.role || "SALES_AGENT"
+      };
+      const res = await axiosInstance.post("/payments/create", payload);
+      if(res.data.success) {
+        alert("Payment added successfully!");
+        closePaymentModal();
+        // Refresh Payments
+        const refreshRes = await axiosInstance.get(`/payments/branch/${branchId}?adminId=${adminId}`);
+        if(refreshRes.data.success) setPayments(refreshRes.data.payments || refreshRes.data.data || []);
+      }
+    } catch (err) {
+      console.error(err);
+      alert(err.response?.data?.message || 'Error recording payment');
+    }
+  };
+
+  const handleApprovePayment = async () => {
+    if(!window.confirm("Approve this payment?")) return;
+    try {
+      const res = await axiosInstance.post('/payments/verify-manual', { paymentId: selectedPayment.id, action: 'Approve' });
+      if(res.data.success) {
+        alert("Payment Approved!");
+        closePaymentModal();
+        setActiveTab(''); // hack to trigger reload
+        setTimeout(() => setActiveTab('payment'), 50);
+      }
+    } catch (e) {
+      alert(e.response?.data?.message || 'Approval Failed');
+    }
+  };
+
+  const handleRejectPayment = async () => {
+    const remark = window.prompt("Enter rejection remark (optional):");
+    if (remark === null) return; // Cancelled
+    try {
+      const res = await axiosInstance.post('/payments/verify-manual', { paymentId: selectedPayment.id, action: 'Reject', rejectionRemarks: remark });
+      if(res.data.success) {
+        alert("Payment Rejected!");
+        closePaymentModal();
+        setActiveTab(''); // hack to trigger reload
+        setTimeout(() => setActiveTab('payment'), 50);
+      }
+    } catch (e) {
+      alert(e.response?.data?.message || 'Rejection Failed');
+    }
+  };
+
+  const closePaymentModal = () => {
+    setIsPaymentModalOpen(false);
+    setSelectedPayment(null);
+  };
+
+  // Format currency
+  const formatCurrency = (amount) => {
+    return `₹${Number(amount || 0).toFixed(2)}`;
+  };
+
+  // Get status badge for payments
+  const getPaymentStatusBadge = () => {
+    return (
+      <span className={`badge rounded-pill bg-success-subtle text-success-emphasis px-3 py-1`}>
+        Paid
+      </span>
+    );
+  };
+
+  // Get status badge for attendance
+  const getAttendanceStatusBadge = (status) => {
+    const s = status || "Present";
+    const badgeClasses = {
+      Present: "bg-success-subtle text-success-emphasis",
+      "In Gym": "bg-primary-subtle text-primary-emphasis",
+      Absent: "bg-danger-subtle text-danger-emphasis",
+      Late: "bg-warning-subtle text-warning-emphasis",
+      Completed: "bg-success-subtle text-success-emphasis"
+    };
+    return (
+      <span className={`badge rounded-pill ${badgeClasses[s] || 'bg-secondary'} px-3 py-1`}>
+        {s}
+      </span>
+    );
+  };
+
+  // Format date
+  const formatDate = (dateString) => {
+    if(!dateString) return "—";
+    const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    return new Date(dateString).toLocaleDateString('en-US', options);
+  };
+
+  // Format time only
+  const formatTimeOnly = (dateString) => {
+    if(!dateString) return "—";
+    const options = { hour: '2-digit', minute: '2-digit' };
+    return new Date(dateString).toLocaleTimeString('en-US', options);
+  };
+
+  // When plan is selected, auto-fill amount
+  const handlePlanSelect = (e) => {
+    const selectedPlanId = e.target.value;
+    const plan = plans.find(p => p.id.toString() === selectedPlanId);
+    setNewPayment({
+      ...newPayment, 
+      planId: selectedPlanId,
+      amount: plan ? plan.price : ""
+    });
+  };
+
+  const exportAttendanceToExcel = () => {
+    if (attendanceRecords.length === 0) {
+      alert("No attendance records available to export.");
+      return;
+    }
+    const dataToExport = attendanceRecords.map((r) => ({
+      "Member Name": r.name || '—',
+      "Date": formatDate(r.checkIn || r.date),
+      "Role": r.role || 'Member',
+      "Status": r.status || '—',
+      "Mode": r.mode || '—',
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Daily Attendance");
+    XLSX.writeFile(workbook, `Daily_Attendance_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportAttendanceToPDF = () => {
+    if (attendanceRecords.length === 0) {
+      alert("No attendance records available to export.");
+      return;
+    }
+    const doc = new jsPDF();
+    doc.text("Daily Attendance Report", 14, 15);
+    const tableColumn = ["Member Name", "Date", "Role", "Status", "Mode"];
+    const tableRows = attendanceRecords.map((r) => [
+      r.name || '—',
+      formatDate(r.checkIn || r.date),
+      r.role || 'Member',
+      r.status || '—',
+      r.mode || '—',
+    ]);
+    autoTable(doc, {
+      startY: 20,
+      head: [tableColumn],
+      body: tableRows,
+    });
+    doc.save(`Daily_Attendance_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  const exportPaymentsToExcel = () => {
+    if (payments.length === 0) {
+      alert("No payment records available to export.");
+      return;
+    }
+    const dataToExport = payments.map((p) => ({
+      "Invoice No": p.invoiceNo || p.invoice_number || `INV-${p.id}`,
+      "Member Name": p.memberName || p.member_name || '—',
+      "Plan": p.planName || p.plan_name || '—',
+      "Amount": `₹${p.amount || 0}`,
+      "Mode": p.paymentMode || p.payment_mode || '—',
+      "Date": p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—',
+      "Status": p.status || 'Paid',
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Payments");
+    XLSX.writeFile(workbook, `Payment_Collection_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportPaymentsToPDF = () => {
+    if (payments.length === 0) {
+      alert("No payment records available to export.");
+      return;
+    }
+    const doc = new jsPDF();
+    doc.text("Payment Collection Report", 14, 15);
+    const tableColumn = ["Invoice No", "Member Name", "Plan", "Amount", "Mode", "Date", "Status"];
+    const tableRows = payments.map((p) => [
+      p.invoiceNo || p.invoice_number || `INV-${p.id}`,
+      p.memberName || p.member_name || '—',
+      p.planName || p.plan_name || '—',
+      `₹${p.amount || 0}`,
+      p.paymentMode || p.payment_mode || '—',
+      p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—',
+      p.status || 'Paid',
+    ]);
+    autoTable(doc, {
+      startY: 20,
+      head: [tableColumn],
+      body: tableRows,
+    });
+    doc.save(`Payment_Collection_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  return (
+    <div className="mt-2">
+      {/* Header */}
+      <div className="row mb-4">
+        <div className="col-12">
+          <h2 className="fw-bold" style={{ color: '#ea580c' }}>
+            {t("receptionist.paymentsTitle", "Payments & Member Attendance")}
+          </h2>
+          <p className="text-muted mb-0">
+            {t("receptionist.paymentsSubtitle", "Manage payments, plans, and view attendance reports")}
+          </p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="row mb-4">
+        <div className="col-12">
+          <ul className="nav nav-tabs border-0 flex-nowrap overflow-auto" style={{ whiteSpace: 'nowrap' }}>
+            <li className="nav-item">
+              <button
+                className={`nav-link px-4 ${activeTab === 'payment' ? 'active' : ''}`}
+                style={activeTab === 'payment' ? { background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', color: 'white', borderRadius: '8px 8px 0 0', fontWeight: '600' } : { color: '#334155', fontWeight: '500' }}
+                onClick={() => setActiveTab('payment')}
+              >
+                <FaMoneyBillWave className="me-2" /> {t("receptionist.tabPaymentInvoice", "Payment & Invoice")}
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                className={`nav-link px-4 ${activeTab === 'attendance' ? 'active' : ''}`}
+                style={activeTab === 'attendance' ? { background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', color: 'white', borderRadius: '8px 8px 0 0', fontWeight: '600' } : { color: '#334155', fontWeight: '500' }}
+                onClick={() => setActiveTab('attendance')}
+              >
+                <FaCalendarAlt className="me-2" /> {t("receptionist.tabMemberAttendance", "Member Attendance")}
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                className={`nav-link px-4 ${activeTab === 'plans' ? 'active' : ''}`}
+                style={activeTab === 'plans' ? { background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', color: 'white', borderRadius: '8px 8px 0 0', fontWeight: '600' } : { color: '#334155', fontWeight: '500' }}
+                onClick={() => setActiveTab('plans')}
+              >
+                <FaTags className="me-2" /> {t("receptionist.tabSubscriptionPlans", "Subscription Plans")}
+              </button>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="text-center py-4">
+          <div className="spinner-border text-primary" role="status">
+            <span className="visually-hidden">{t("common.loading", "Loading...")}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Tab Content */}
+      {!loading && (
+        <div className="row">
+          <div className="col-12">
+            {/* Payment Collection Tab */}
+            {activeTab === 'payment' && (
+              <div>
+                <div className="row mb-4 align-items-center">
+                  <div className="col-12 col-lg-7">
+                    <h3 className="fw-bold" style={{ color: '#ea580c' }}>
+                      {t("receptionist.paymentCollectionTitle", "Payment Collection")}
+                    </h3>
+                    <p className="text-muted mb-0">
+                      {t("receptionist.paymentCollectionSubtitle", "Manage member payments and receipts")}
+                    </p>
+                  </div>
+                  <div className="col-12 col-lg-5 text-lg-end mt-3 mt-lg-0 d-flex align-items-center justify-content-lg-end gap-2">
+                    {/* Export Data Dropdown */}
+                    <div className="dropdown">
+                      <button
+                        className="btn btn-success fw-semibold dropdown-toggle d-flex align-items-center gap-2"
+                        style={{ borderRadius: '8px', padding: '10px 16px', fontWeight: '500' }}
+                        type="button"
+                        data-bs-toggle="dropdown"
+                        aria-expanded="false"
+                      >
+                        <FaDownload /> {t("common.exportData", "Export Data")}
+                      </button>
+                      <ul className="dropdown-menu dropdown-menu-end shadow border-0">
+                        <li>
+                          <button className="dropdown-item d-flex align-items-center gap-2 text-success fw-medium" onClick={exportPaymentsToExcel}>
+                            <strong className="text-success">XLSX</strong> {t("common.exportToExcel", "Export to Excel")}
+                          </button>
+                        </li>
+                        <li>
+                          <button className="dropdown-item d-flex align-items-center gap-2 text-danger fw-medium" onClick={exportPaymentsToPDF}>
+                            <strong className="text-danger">PDF</strong> {t("common.exportToPdf", "Export to PDF")}
+                          </button>
+                        </li>
+                      </ul>
+                    </div>
+                    <button
+                      className="btn d-flex align-items-center justify-content-center text-white shadow-sm"
+                      style={{ background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: '600' }}
+                      onClick={handleAddPayment}
+                    >
+                      <i className="fas fa-plus me-2"></i> {t("receptionist.addPayment", "Add Payment")}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Payment Filters Section */}
+                <div className="row mb-4 align-items-center bg-light p-3 rounded mx-0 shadow-sm border">
+                  <div className="col-12 col-md-4 mb-3 mb-md-0">
+                    <input className="form-control" type="text" placeholder={t("receptionist.searchMemberInvoice", "Search Member or Invoice...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-3 mb-3 mb-md-0 d-flex align-items-center gap-2">
+                    <label className="fw-semibold text-muted mb-0" style={{whiteSpace: 'nowrap'}}>{t("common.from", "From:")}</label>
+                    <input className="form-control" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-3 mb-3 mb-md-0 d-flex align-items-center gap-2">
+                    <label className="fw-semibold text-muted mb-0" style={{whiteSpace: 'nowrap'}}>{t("common.to", "To:")}</label>
+                    <input className="form-control" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-2 text-md-end">
+                    <button className="btn btn-outline-secondary btn-sm" onClick={() => { setSearchQuery(""); setFromDate(""); setToDate(""); setStatusFilter("All"); }}>{t("common.clear", "Clear")}</button>
+                  </div>
+                </div>
+
+                {/* Status Tabs for Payments */}
+                <div className="d-flex gap-2 mb-3">
+                  <button 
+                    className="btn btn-sm text-white fw-semibold"
+                    style={statusFilter === 'All' ? { background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', border: 'none' } : { backgroundColor: 'transparent', color: '#ea580c', borderColor: '#ea580c' }}
+                    onClick={() => setStatusFilter('All')}
+                  >
+                    {t("receptionist.allPayments", "All Payments")}
+                  </button>
+                  <button 
+                    className={`btn btn-sm ${statusFilter === 'Pending' ? 'btn-warning' : 'btn-outline-warning'}`}
+                    onClick={() => setStatusFilter('Pending')}
+                  >
+                    {t("receptionist.pendingApprovals", "Pending Approvals ({{count}})", { count: payments.filter(p => p.status === 'Pending').length })}
+                  </button>
+                </div>
+
+                {/* Show Entries Dropdown */}
+                <div className="row mb-3">
+                  <div className="col-12 col-md-6">
+                    <div className="d-flex align-items-center text-dark fw-medium">
+                      <span className="me-2">{t("common.show", "Show")}</span>
+                      <select className="form-select form-select-sm w-auto" value={paymentEntriesPerPage} onChange={handlePaymentEntriesChange}>
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                      </select>
+                      <span className="ms-2">{t("common.entries", "entries")}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Table */}
+                <div className="card shadow-sm border-0">
+                  <div className="table-responsive">
+                    <table className="table table-hover align-middle mb-0">
+                      <thead className="bg-light">
+                        <tr>
+                          <th className="fw-semibold">{t("table.member", "MEMBER")}</th>
+                          <th className="fw-semibold">{t("table.plan", "PLAN")}</th>
+                          <th className="fw-semibold">{t("table.amount", "AMOUNT")}</th>
+                          <th className="fw-semibold">{t("table.status", "STATUS")}</th>
+                          <th className="fw-semibold">{t("table.invoice", "INVOICE")}</th>
+                          <th className="fw-semibold">{t("table.date", "DATE")}</th>
+                          <th className="fw-semibold">{t("table.collectedBy", "COLLECTED BY")}</th>
+                          <th className="fw-semibold">{t("table.actions", "ACTIONS")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentPayments.length === 0 ? (
+                          <tr><td colSpan="8" className="text-center py-4 text-muted">{t("receptionist.noPaymentsFound", "No payments found.")}</td></tr>
+                        ) : currentPayments.map((p) => (
+                          <tr key={p.id || p._id}>
+                            <td className="fw-semibold text-dark">{p.memberName || p.fullName || p.name || 'N/A'}</td>
+                            <td><span className="badge bg-secondary">{p.planName || p.plan || 'Membership Plan'}</span></td>
+                            <td className="fw-bold text-dark">₹{p.amount || p.amountPaid || 0}</td>
+                            <td>
+                              <span className={`badge ${p.status === 'Paid' || p.status === 'Completed' || p.status === 'SUCCESS' ? 'bg-success-subtle text-success border border-success' : 'bg-warning-subtle text-warning border border-warning'}`}>
+                                {p.status || 'Paid'}
+                              </span>
+                            </td>
+                            <td className="text-dark fw-semibold">{p.invoiceNo || p.transactionId || `INV-${p.id || '001'}`}</td>
+                            <td className="text-dark">{p.date ? new Date(p.date).toLocaleString() : 'N/A'}</td>
+                            <td className="text-dark">{p.collectedBy || p.addedBy || 'System (Registration)'}</td>
+                            <td>
+                              <button className="btn btn-sm btn-outline-secondary" onClick={() => handleViewPayment(p)}>
+                                <FaEye className="me-1" /> View
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Pagination & Showing Entries Text */}
+                <div className="row mt-3">
+                  <div className="col-12 col-md-5">
+                    <span className="text-dark fw-semibold">Showing {Math.min(paymentIndexOfFirstEntry + 1, filteredPayments.length)} to {Math.min(paymentIndexOfLastEntry, filteredPayments.length)} of {filteredPayments.length} entries</span>
+                  </div>
+                  <div className="col-12 col-md-7">
+                    <nav className="d-flex justify-content-md-end">
+                      <ul className="pagination mb-0">
+                        <li className={`page-item ${paymentCurrentPage === 1 ? 'disabled' : ''}`}>
+                          <button className="page-link" onClick={paymentPrevPage}>Previous</button>
+                        </li>
+                        <li className="page-item active"><button className="page-link" style={{ backgroundColor: '#ea580c', borderColor: '#ea580c', color: 'white' }}>{paymentCurrentPage}</button></li>
+                        <li className={`page-item ${paymentCurrentPage === paymentTotalPages ? 'disabled' : ''}`}>
+                          <button className="page-link" onClick={paymentNextPage}>Next</button>
+                        </li>
+                      </ul>
+                    </nav>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Subscription Plans Tab */}
+            {activeTab === 'plans' && (
+              <div>
+                <div className="row mb-4 align-items-center">
+                  <div className="col-12">
+                    <h3 className="fw-bold" style={{ color: '#ea580c' }}>Subscription Plans</h3>
+                    <p className="text-muted mb-0">Active plans available in the gym</p>
+                  </div>
+                </div>
+                
+                <div className="row">
+                  {plans.length === 0 ? (
+                    <div className="col-12 text-center py-4 text-muted">No subscription plans found.</div>
+                  ) : plans.map(plan => (
+                    <div key={plan.id} className="col-12 col-md-4 mb-4">
+                      <div className="card h-100 shadow-sm border-0 border-top border-4" style={{ borderColor: '#ea580c' }}>
+                        <div className="card-body">
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="badge px-2 py-1" style={{ backgroundColor: '#ea580c', color: 'white', fontSize: "0.75rem" }}>
+                              {plan.type ? plan.type.toUpperCase() : "GROUP"}
+                            </span>
+                            {(plan.status !== undefined) && (
+                              <span className={`badge ${plan.status === 'Active' || plan.status === true ? 'bg-success' : 'bg-secondary'} px-2 py-1`} style={{ fontSize: "0.75rem" }}>
+                                {plan.status === true || plan.status === 'Active' ? 'Active' : 'Inactive'}
+                              </span>
+                            )}
+                          </div>
+                          <h5 className="card-title fw-bold text-dark mb-1">{plan.name}</h5>
+                          <h3 className="fw-bold my-3" style={{ color: '#1e293b' }}>₹{Number(plan.price).toLocaleString()}</h3>
+                          <div className="mb-3 d-flex flex-wrap gap-2">
+                            <span className="badge bg-light text-dark border">📅 Validity: {plan.validityDays || 0} Days</span>
+                            {plan.sessions > 0 && <span className="badge bg-light text-dark border">🎯 {plan.sessions} Sessions</span>}
+                            {plan.trainerType && <span className="badge bg-light text-dark border">👤 Trainer: {plan.trainerType}</span>}
+                          </div>
+                          {plan.description && <p className="text-muted small mb-0">{plan.description}</p>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Daily Attendance Report Tab */}
+            {activeTab === 'attendance' && (
+              <div>
+                <div className="row mb-4 align-items-center">
+                  <div className="col-12 col-md-8">
+                    <h3 className="fw-bold">Daily Attendance Report</h3>
+                    <p className="text-muted mb-0">View member attendance records</p>
+                  </div>
+                  <div className="col-12 col-md-4 text-md-end mt-3 mt-md-0">
+                    {/* Export Data Dropdown */}
+                    <div className="dropdown">
+                      <button
+                        className="btn btn-success fw-semibold dropdown-toggle d-inline-flex align-items-center gap-2"
+                        style={{ borderRadius: '8px', padding: '10px 16px', fontWeight: '500' }}
+                        type="button"
+                        data-bs-toggle="dropdown"
+                        aria-expanded="false"
+                      >
+                        <FaDownload /> Export Data
+                      </button>
+                      <ul className="dropdown-menu dropdown-menu-end shadow border-0">
+                        <li>
+                          <button className="dropdown-item d-flex align-items-center gap-2 text-success fw-medium" onClick={exportAttendanceToExcel}>
+                            <strong className="text-success">XLSX</strong> Export to Excel
+                          </button>
+                        </li>
+                        <li>
+                          <button className="dropdown-item d-flex align-items-center gap-2 text-danger fw-medium" onClick={exportAttendanceToPDF}>
+                            <strong className="text-danger">PDF</strong> Export to PDF
+                          </button>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filters Section */}
+                <div className="row mb-4 align-items-center bg-light p-3 rounded mx-0 shadow-sm border">
+                  <div className="col-12 col-md-4 mb-3 mb-md-0">
+                    <input className="form-control" type="text" placeholder="Search Member Name..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-3 mb-3 mb-md-0 d-flex align-items-center gap-2">
+                    <label className="fw-semibold text-muted mb-0" style={{whiteSpace: 'nowrap'}}>From:</label>
+                    <input className="form-control" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-3 mb-3 mb-md-0 d-flex align-items-center gap-2">
+                    <label className="fw-semibold text-muted mb-0" style={{whiteSpace: 'nowrap'}}>To:</label>
+                    <input className="form-control" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+                  </div>
+                  <div className="col-12 col-md-2 text-md-end">
+                    <button className="btn btn-outline-secondary btn-sm" onClick={() => { setSearchQuery(""); setFromDate(""); setToDate(""); }}>Clear</button>
+                  </div>
+                </div>
+
+                <div className="card shadow-sm border-0">
+                  <div className="table-responsive">
+                    <table className="table table-hover align-middle mb-0">
+                      <thead className="bg-light">
+                        <tr>
+                          <th className="fw-semibold">MEMBER NAME</th>
+                          <th className="fw-semibold">DATE</th>
+                          <th className="fw-semibold">ROLE</th>
+                          <th className="fw-semibold">CHECK-IN</th>
+                          <th className="fw-semibold">CHECK-OUT</th>
+                          <th className="fw-semibold">STATUS</th>
+                          <th className="fw-semibold">MODE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentAttendanceRecords.length === 0 ? (
+                          <tr><td colSpan="7" className="text-center py-4">No attendance records found</td></tr>
+                        ) : currentAttendanceRecords.map((record) => (
+                          <tr key={record.id}>
+                            <td><strong>{record.name || 'Unknown'}</strong></td>
+                            <td>{formatDate(record.checkIn || record.date)}</td>
+                            <td>{record.role || 'Member'}</td>
+                            <td>{formatTimeOnly(record.checkIn)}</td>
+                            <td>{formatTimeOnly(record.checkOut)}</td>
+                            <td>{getAttendanceStatusBadge(record.status)}</td>
+                            <td>{record.mode || 'QR'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Attendance Pagination */}
+                <div className="row mt-3">
+                  <div className="col-12 col-md-5">
+                    <span>Showing {Math.min(attendanceIndexOfFirstEntry + 1, filteredAttendance.length)} to {Math.min(attendanceIndexOfLastEntry, filteredAttendance.length)} of {filteredAttendance.length} entries</span>
+                  </div>
+                  <div className="col-12 col-md-7">
+                    <nav className="d-flex justify-content-md-end">
+                      <ul className="pagination mb-0">
+                        <li className={`page-item ${attendanceCurrentPage === 1 ? 'disabled' : ''}`}>
+                          <button className="page-link" onClick={attendancePrevPage}>Previous</button>
+                        </li>
+                        <li className="page-item active"><button className="page-link">{attendanceCurrentPage}</button></li>
+                        <li className={`page-item ${attendanceCurrentPage === attendanceTotalPages ? 'disabled' : ''}`}>
+                          <button className="page-link" onClick={attendanceNextPage}>Next</button>
+                        </li>
+                      </ul>
+                    </nav>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PAYMENT MODAL */}
+      {isPaymentModalOpen && (
+        <div className="modal fade show" style={{ display: 'block', backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={closePaymentModal}>
+          <div className="modal-dialog modal-lg modal-dialog-centered" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-content border-0 shadow-lg">
+              <div className="modal-header border-bottom-0 pb-0">
+                <h5 className="modal-title fw-bold">
+                  {paymentModalType === 'add' ? 'Add New Payment' : 'Payment Details'}
+                </h5>
+                <button type="button" className="btn-close" onClick={closePaymentModal}></button>
+              </div>
+              <div className="modal-body p-4">
+                <form onSubmit={paymentModalType === 'add' ? submitNewPayment : (e) => e.preventDefault()}>
+                  
+                  {/* Toggle New vs Existing Member */}
+                  {paymentModalType === 'add' && (
+                    <div className="d-flex mb-4 p-1 bg-light rounded-pill" style={{ width: 'max-content' }}>
+                      <button 
+                        type="button" 
+                        className={`btn rounded-pill px-4 ${memberType === 'existing' ? 'btn-primary text-white' : 'btn-light text-muted'}`}
+                        onClick={() => setMemberType('existing')}
+                        style={{ backgroundColor: memberType === 'existing' ? '#6EB2CC' : 'transparent', borderColor: 'transparent' }}
+                      >
+                        Existing Member
+                      </button>
+                      <button 
+                        type="button" 
+                        className={`btn rounded-pill px-4 ${memberType === 'new' ? 'btn-primary text-white' : 'btn-light text-muted'}`}
+                        onClick={() => setMemberType('new')}
+                        style={{ backgroundColor: memberType === 'new' ? '#6EB2CC' : 'transparent', borderColor: 'transparent' }}
+                      >
+                        New Walk-in
+                      </button>
+                    </div>
+                  )}
+
+                  {memberType === 'new' && paymentModalType === 'add' ? (
+                    <div className="alert alert-info border-0 rounded-3 d-flex align-items-center">
+                      <div>
+                        <h6 className="fw-bold mb-1">New Member Registration Required</h6>
+                        <p className="mb-2 mb-0 text-muted small">Please complete the full registration process for new walk-in members before collecting payment. This ensures their profile, goal, and health details are properly recorded.</p>
+                        <button type="button" className="btn btn-sm text-white px-4 mt-2" style={{ backgroundColor: '#6EB2CC' }} onClick={() => { closePaymentModal(); window.location.href = '/receptionist/walk-in-registration'; }}>Go to New Registration Page</button>
+                      </div>
+                    </div>
+                  ) : (
+                  <>
+                  {/* Member & Plan */}
+                  <div className="row mb-3 g-3">
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Select Member <span className="text-danger">*</span></label>
+                      {paymentModalType === 'add' ? (
+                        <>
+                        <select 
+                          className="form-select rounded-3 mb-2" 
+                          required
+                          value={newPayment.memberId}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setNewPayment({...newPayment, memberId: val});
+                            const mem = members.find(m => (m.id || m.userId).toString() === val);
+                            setSelectedMemberDetails(mem || null);
+                          }}
+                        >
+                          <option value="">-- Choose Member --</option>
+                          {Array.isArray(members) && members.map(m => (
+                            <option key={m.id || m.userId} value={m.id || m.userId}>{m.fullName} ({m.phone})</option>
+                          ))}
+                        </select>
+                        {selectedMemberDetails && (
+                          <div className="card bg-light border-0 rounded-3 mt-2">
+                            <div className="card-body p-3 py-2 text-sm">
+                              <div className="d-flex flex-column gap-1">
+                                <div><strong className="text-secondary">Name:</strong> {selectedMemberDetails.fullName}</div>
+                                <div><strong className="text-secondary">Phone:</strong> {selectedMemberDetails.phone}</div>
+                                <div><strong className="text-secondary">Email:</strong> {selectedMemberDetails.email}</div>
+                                <div><strong className="text-secondary">Gender:</strong> {selectedMemberDetails.gender || 'N/A'}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        </>
+                      ) : (
+                        <input type="text" className="form-control rounded-3" value={selectedPayment?.memberName || ''} readOnly />
+                      )}
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Subscription Plan <span className="text-danger">*</span></label>
+                      {paymentModalType === 'add' ? (
+                        <select 
+                          className="form-select rounded-3" 
+                          required
+                          value={newPayment.planId}
+                          onChange={handlePlanSelect}
+                        >
+                          <option value="">-- Choose Plan --</option>
+                          {plans.map(p => (
+                            <option key={p.id} value={p.id}>{p.name} (₹{p.price})</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input type="text" className="form-control rounded-3" value={selectedPayment?.planName || 'N/A'} readOnly />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Amount & Mode */}
+                  <div className="row mb-3 g-3">
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Amount (₹) <span className="text-danger">*</span></label>
+                      <input
+                        type="number"
+                        className="form-control rounded-3"
+                        value={paymentModalType === 'add' ? newPayment.amount : selectedPayment?.amount || ''}
+                        onChange={(e) => setNewPayment({...newPayment, amount: e.target.value})}
+                        readOnly={paymentModalType === 'view'}
+                        required
+                      />
+                    </div>
+                    <div className="col-12 col-md-6">
+                      <label className="form-label">Payment Mode <span className="text-danger">*</span></label>
+                      <select
+                        className="form-select rounded-3"
+                        value={newPayment.paymentMode}
+                        onChange={(e) => setNewPayment({...newPayment, paymentMode: e.target.value})}
+                        disabled={paymentModalType === 'view'}
+                      >
+                        <option value="Cash">Cash</option>
+                        <option value="UPI">UPI</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Status & Invoice (For View Mode) */}
+                  {paymentModalType === 'add' && (
+                    <div className="row mb-3">
+                      <div className="col-12">
+                        <label className="form-label">Assign Trainer (Optional)</label>
+                        <input
+                          type="text"
+                          className="form-control rounded-3"
+                          placeholder="e.g. Rahul (Personal Trainer) or General Trainer"
+                          value={newPayment.trainerName || ''}
+                          onChange={(e) => setNewPayment({...newPayment, trainerName: e.target.value})}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Status & Invoice (For View Mode) */}
+                  {paymentModalType === 'view' && (
+                    <div className="row mb-3 g-3">
+                      <div className="col-12 col-md-4">
+                        <label className="form-label">Invoice Number</label>
+                        <input type="text" className="form-control rounded-3" value={selectedPayment?.invoiceNo || ''} readOnly />
+                      </div>
+                      <div className="col-12 col-md-4">
+                        <label className="form-label">Payment Date</label>
+                        <input type="text" className="form-control rounded-3" value={formatDate(selectedPayment?.paymentDate)} readOnly />
+                      </div>
+                      <div className="col-12 col-md-4">
+                        <label className="form-label">Collected By</label>
+                        <input type="text" className="form-control rounded-3" value={selectedPayment?.collectedByName ? `${selectedPayment.collectedByName} (${selectedPayment.collectedByRole || 'Staff'})` : 'Online/Admin'} readOnly />
+                      </div>
+                    </div>
+                  )}
+
+                  {paymentModalType === 'view' && selectedPayment?.transactionId && (
+                    <div className="row mb-3 g-3">
+                      <div className="col-12 col-md-6">
+                        <label className="form-label">Transaction / UTR ID</label>
+                        <input type="text" className="form-control rounded-3" value={selectedPayment.transactionId} readOnly />
+                      </div>
+                      {selectedPayment?.paymentProofImage && (
+                        <div className="col-12 col-md-6">
+                          <label className="form-label">Payment Proof</label>
+                          <div>
+                            <a href={selectedPayment.paymentProofImage} target="_blank" rel="noreferrer" className="btn btn-sm btn-info text-white">View Image</a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  </>
+                  )}
+
+                  <div className="text-end mt-4">
+                    <button type="button" className="btn btn-light me-2" onClick={closePaymentModal}>Close</button>
+                    {paymentModalType === 'add' && (
+                      <button type="submit" className="btn text-white px-4" style={{ backgroundColor: '#6EB2CC' }}>Save Payment</button>
+                    )}
+                    {paymentModalType === 'view' && selectedPayment?.status === 'Pending' && (
+                      <>
+                        <button type="button" className="btn btn-success px-4 me-2" onClick={handleApprovePayment}>Approve Payment</button>
+                        <button type="button" className="btn btn-danger px-4" onClick={handleRejectPayment}>Reject</button>
+                      </>
+                    )}
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ReceptionistPaymentCollection;

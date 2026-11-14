@@ -1,0 +1,1 @@
+import { pool } from './src/config/db.js'; pool.query('SELECT id, roleId, status FROM user WHERE roleId IN (1, 9)').then(([rows])=> { console.log(rows); process.exit(0); })
