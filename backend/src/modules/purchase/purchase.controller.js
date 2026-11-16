@@ -114,7 +114,12 @@ export const verifyRazorpayPayment = async (req, res) => {
     // 2. Immediately approve it since payment is verified
     let successData = purchase;
     try {
-      const reqMock = { params: { id: purchase.id }, body: { status: "APPROVED" } };
+      const reqMock = {
+        params: { id: purchase.id },
+        body: { status: "APPROVED", password: purchaseData.password || purchaseData.visiblePassword },
+        user: { id: 1, roleId: 1, role: "SUPERADMIN" },
+        isSystemApproval: true
+      };
       const resMock = {
         json: (data) => { if (data) successData = data; },
         status: (code) => resMock
@@ -196,15 +201,15 @@ export const createPurchase = async (req, res) => {
 
     const purchase = await createPurchaseService(data);
 
-    // If it is a Free Trial, INSTANTLY AUTO-APPROVE and create admin user account immediately
-    const isTrialPlan = data.selectedPlan && (
+    // If it is a Free Trial or demo-paid plan, INSTANTLY AUTO-APPROVE and create admin user account immediately
+    const isAutoApprovePlan = (data.isDemoPaid === 'true' || data.isDemoPaid === true) || (data.selectedPlan && (
       data.selectedPlan.toLowerCase().includes("trial") ||
       data.selectedPlan.toLowerCase().includes("free") ||
       data.selectedPlan.toLowerCase().includes("try") ||
       data.amount == 0
-    );
+    ));
 
-    if (isTrialPlan) {
+    if (isAutoApprovePlan) {
       try {
         await pool.query(
           "UPDATE leads SET status = 'Converted' WHERE email = ? AND leadType = 'SAAS'",
@@ -215,7 +220,12 @@ export const createPurchase = async (req, res) => {
       }
 
       // Trigger instant auto-approval to create user in 'user' table
-      const reqMock = { params: { id: purchase.id }, body: { status: "APPROVED" } };
+      const reqMock = {
+        params: { id: purchase.id },
+        body: { status: "APPROVED", password: data.password || data.visiblePassword },
+        user: { id: 1, roleId: 1, role: "SUPERADMIN" },
+        isSystemApproval: true
+      };
       let successData = purchase;
       const resMock = {
         json: (d) => { successData = d; },
@@ -310,7 +320,11 @@ export const getAllPurchases = async (req, res) => {
 
 export const updatePurchaseStatus = async (req, res, next) => {
   try {
-    const isSuperAdmin = req.user?.roleId === 1 || (req.user?.role || "").toUpperCase().includes("SUPERADMIN");
+    const isSuperAdmin = Boolean(
+      req.isSystemApproval ||
+      req.user?.roleId === 1 ||
+      (req.user?.role || "").toUpperCase().includes("SUPERADMIN")
+    );
     if (!isSuperAdmin) {
       return res.status(403).json({
         success: false,
@@ -405,8 +419,23 @@ export const updatePurchaseStatus = async (req, res, next) => {
 
         } else {
           // USER DOES NOT EXIST: Create New Admin Account
-          const tempPassword = data.password || data.visiblePassword || req.body?.password || `Gym@${Math.floor(1000 + Math.random() * 9000)}`;
-          const hash = await bcrypt.hash(tempPassword, 10);
+          let userEnteredPassword = req.body?.password || data.password || data.visiblePassword;
+          if (!userEnteredPassword) {
+            try {
+              const [pwdRows] = await pool.query(
+                "SELECT password, visiblePassword FROM purchase WHERE id = ? LIMIT 1",
+                [id]
+              );
+              if (pwdRows && pwdRows.length > 0) {
+                userEnteredPassword = pwdRows[0].password || pwdRows[0].visiblePassword;
+              }
+            } catch (pErr) {
+              console.warn("Could not retrieve purchase password:", pErr.message);
+            }
+          }
+
+          const finalPassword = userEnteredPassword || `Gym@${Math.floor(1000 + Math.random() * 9000)}`;
+          const hash = await bcrypt.hash(finalPassword, 10);
 
           const startDate = new Date(); // Start Date is strictly Approval Date
           const expiryDate = new Date(startDate);
@@ -455,7 +484,7 @@ export const updatePurchaseStatus = async (req, res, next) => {
             trialStatus,
             expiryDate,
             trialStatus === "Active" ? 1 : 0,
-            tempPassword,
+            finalPassword,
             subPlan,
             data.gstNumber || null,
             data.city || null,
@@ -464,6 +493,16 @@ export const updatePurchaseStatus = async (req, res, next) => {
 
           const newUserId = result.insertId;
           const newAdminId = newUserId;
+
+          // For gym admin (roleId=2), ensure adminId references itself as tenant owner
+          try {
+            await pool.query(
+              "UPDATE user SET adminId = ? WHERE id = ? AND (adminId IS NULL OR adminId = 0)",
+              [newUserId, newUserId]
+            );
+          } catch (admErr) {
+            console.error("Notice: Could not set adminId on new admin:", admErr.message);
+          }
 
           const startDateStr = (startDate && !isNaN(new Date(startDate).getTime()) ? new Date(startDate) : new Date()).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
           const expiryDateStr = (expiryDate && !isNaN(new Date(expiryDate).getTime()) ? new Date(expiryDate) : new Date(Date.now() + planDurationDays * 86400000)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -482,7 +521,7 @@ export const updatePurchaseStatus = async (req, res, next) => {
                 Name: data.adminName || data.companyName || "Admin",
                 SoftwareName: softwareTitle,
                 Email: data.email,
-                Password: tempPassword,
+                Password: finalPassword,
                 PlanName: data.selectedPlan || "N/A",
                 Amount: data.amount || 0,
                 Duration: actualPlanDuration || "Monthly",
