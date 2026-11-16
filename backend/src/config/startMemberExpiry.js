@@ -1,15 +1,20 @@
 import cron from "node-cron";
 import { pool } from "../config/db.js";
 export const startMemberExpiryCron = () => {
+  let isRunning = false;
   cron.schedule("0 3 * * *", async () => {
+    if (isRunning) return;
+    isRunning = true;
+    let connection = null;
     let lockAcquired = false;
 
     try {
-      const [[lock]] = await pool.query(
+      connection = await pool.getConnection();
+      const [[lock]] = await connection.query(
         `SELECT GET_LOCK('member_expiry_cron', 0) AS acquired`
       );
 
-      if (!lock.acquired) {
+      if (!lock || !lock.acquired) {
         console.log("⏭️ Membership expiry cron skipped (lock held)");
         return;
       }
@@ -22,7 +27,7 @@ export const startMemberExpiryCron = () => {
 
       console.log(`⏳ Membership expiry cron started | IST: ${istTime}`);
 
-      await pool.query(`
+      await connection.query(`
         UPDATE member
         SET status = 'Inactive'
         WHERE status = 'Active'
@@ -34,9 +39,17 @@ export const startMemberExpiryCron = () => {
     } catch (err) {
       console.error("❌ Membership expiry cron failed", err);
     } finally {
-      if (lockAcquired) {
-        await pool.query(`SELECT RELEASE_LOCK('member_expiry_cron')`);
+      try {
+        if (lockAcquired && connection) {
+          await connection.query(`SELECT RELEASE_LOCK('member_expiry_cron')`);
+        }
+      } catch (releaseErr) {
+        console.error("⚠️ Failed to release member_expiry_cron lock:", releaseErr.message);
       }
+      if (connection) {
+        connection.release();
+      }
+      isRunning = false;
     }
   });
 };
@@ -126,15 +139,21 @@ const SERVER_TIME_CORRECTION_MINUTES = 30;
 // =======================================================
 
 export const startPTAutoCompleteCron = () => {
-  cron.schedule("*/1 * * * *", async () => {
+  let isRunning = false;
+  // Run every 5 minutes instead of every 1 minute to avoid pool thrashing
+  cron.schedule("*/5 * * * *", async () => {
+    if (isRunning) return;
+    isRunning = true;
+    let connection = null;
     let lockAcquired = false;
 
     try {
-      const [[lock]] = await pool.query(
+      connection = await pool.getConnection();
+      const [[lock]] = await connection.query(
         `SELECT GET_LOCK('pt_auto_complete_cron', 0) AS acquired`
       );
 
-      if (!lock.acquired) {
+      if (!lock || !lock.acquired) {
         console.log("⏭️ PT auto-complete cron skipped (lock held)");
         return;
       }
@@ -156,7 +175,7 @@ export const startPTAutoCompleteCron = () => {
       /* =====================================
          1️⃣ UPCOMING → ACTIVE
       ===================================== */
-      const [activeResult] = await pool.query(`
+      const [activeResult] = await connection.query(`
         UPDATE session
         SET status = 'Active'
         WHERE status = 'Upcoming'
@@ -171,7 +190,7 @@ export const startPTAutoCompleteCron = () => {
       /* =====================================
          2️⃣ ACTIVE → COMPLETE
       ===================================== */
-      const [completeResult] = await pool.query(`
+      const [completeResult] = await connection.query(`
         UPDATE session
         SET status = 'Complete'
         WHERE status = 'Active'
@@ -185,7 +204,7 @@ export const startPTAutoCompleteCron = () => {
       /* =====================================
          3️⃣ UPCOMING → COMPLETE (MISSED)
       ===================================== */
-      const [missedResult] = await pool.query(`
+      const [missedResult] = await connection.query(`
         UPDATE session
         SET status = 'Complete'
         WHERE status = 'Upcoming'
@@ -199,9 +218,17 @@ export const startPTAutoCompleteCron = () => {
     } catch (err) {
       console.error("❌ PT auto-complete cron failed", err);
     } finally {
-      if (lockAcquired) {
-        await pool.query(`SELECT RELEASE_LOCK('pt_auto_complete_cron')`);
+      try {
+        if (lockAcquired && connection) {
+          await connection.query(`SELECT RELEASE_LOCK('pt_auto_complete_cron')`);
+        }
+      } catch (releaseErr) {
+        console.error("⚠️ Failed to release pt_auto_complete_cron lock:", releaseErr.message);
       }
+      if (connection) {
+        connection.release();
+      }
+      isRunning = false;
     }
   });
 };

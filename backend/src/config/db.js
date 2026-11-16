@@ -3,22 +3,31 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const dbUrl = process.env.DATABASE_URL || process.env.MYSQL_URL;
+const isRailway = Boolean(
+  (process.env.DB_HOST && process.env.DB_HOST.includes("rlwy.net")) ||
+  (dbUrl && dbUrl.includes("rlwy.net"))
+);
+
+const poolOptions = {
+  waitForConnections: true,
+  connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT, 10) || 20,
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  connectTimeout: 20000,
+  ssl: isRailway ? { rejectUnauthorized: false } : undefined
+};
 
 export const pool = (
   dbUrl
-    ? mysql.createPool(dbUrl)
+    ? mysql.createPool({ uri: dbUrl, ...poolOptions })
     : mysql.createPool({
         host: process.env.DB_HOST || "localhost",
         user: process.env.DB_USER || "root",
         password: process.env.DB_PASS || "",
         database: process.env.DB_NAME || "gym_db",
         port: parseInt(process.env.DB_PORT) || 3306,
-        waitForConnections: true,
-        connectionLimit: 10,
-        queueLimit: 0,
-        enableKeepAlive: true,
-        keepAliveInitialDelay: 10000,
-        ssl: process.env.DB_HOST?.includes("rlwy.net") ? { rejectUnauthorized: false } : undefined
+        ...poolOptions
       })
 ).promise();
 
@@ -26,7 +35,7 @@ export const pool = (
 pool
   .getConnection()
   .then((connection) => {
-    console.log("✅ MySQL connected successfully!");
+    console.log("✅ MySQL connected successfully! Pool connection limit:", poolOptions.connectionLimit);
     connection.release(); // 🔥 Release immediately so the server can start fast
 
     // Run all heavy seeding/migration in background (non-blocking)

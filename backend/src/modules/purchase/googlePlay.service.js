@@ -81,22 +81,25 @@ export const resolvePlanAndDuration = (productId, basePlanId, customDuration) =>
  */
 export const getGooglePlayCredentials = () => {
   let keyData = null;
-  if (process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON) {
+  const directJson = process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON;
+  const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || 
+                  process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || 
+                  process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PATH;
+
+  if (directJson) {
     try {
-      keyData = typeof process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON === "string"
-        ? JSON.parse(process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON)
-        : process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON;
+      keyData = typeof directJson === "string" ? JSON.parse(directJson) : directJson;
     } catch (e) {
       console.error("Failed to parse GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:", e.message);
     }
-  } else if (process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PATH) {
+  } else if (keyPath) {
     try {
-      const resolvedPath = path.resolve(process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_PATH);
+      const resolvedPath = path.resolve(keyPath);
       if (fs.existsSync(resolvedPath)) {
         keyData = JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
       }
     } catch (e) {
-      console.error("Failed to read service account from GOOGLE_PLAY_SERVICE_ACCOUNT_PATH:", e.message);
+      console.error("Failed to read service account from key path:", e.message);
     }
   } else {
     const defaultPath = path.resolve("./backend/config/google-service-account.json");
@@ -642,7 +645,9 @@ export const verifyAndProcessGooglePlayPurchase = async (purchasePayload) => {
 export const validatePubSubAuth = (req) => {
   // Method 1: Webhook Secret Token query parameter (?token=...)
   const queryToken = req.query?.token;
-  const configuredSecret = process.env.GOOGLE_PUBSUB_WEBHOOK_SECRET;
+  const configuredSecret = process.env.GOOGLE_PUBSUB_WEBHOOK_SECRET || 
+                           process.env.GOOGLE_PLAY_WEBHOOK_SECRET || 
+                           process.env.GOOGLE_PUBSUB_VERIFICATION_TOKEN;
 
   if (configuredSecret && queryToken === configuredSecret) {
     return { authenticated: true };
@@ -665,10 +670,12 @@ export const validatePubSubAuth = (req) => {
         if (decoded.exp && decoded.exp < now) {
           return { authenticated: false, message: "Token expired" };
         }
-        if (process.env.GOOGLE_PUBSUB_AUDIENCE && decoded.aud !== process.env.GOOGLE_PUBSUB_AUDIENCE) {
+        const expectedAudience = process.env.GOOGLE_PLAY_PUBSUB_AUDIENCE || process.env.GOOGLE_PUBSUB_AUDIENCE;
+        if (expectedAudience && decoded.aud !== expectedAudience) {
           return { authenticated: false, message: "Audience mismatch" };
         }
-        if (process.env.GOOGLE_PUBSUB_SERVICE_ACCOUNT_EMAIL && decoded.email !== process.env.GOOGLE_PUBSUB_SERVICE_ACCOUNT_EMAIL) {
+        const expectedServiceAccount = process.env.GOOGLE_PLAY_PUBSUB_SERVICE_ACCOUNT || process.env.GOOGLE_PUBSUB_SERVICE_ACCOUNT_EMAIL;
+        if (expectedServiceAccount && decoded.email !== expectedServiceAccount) {
           return { authenticated: false, message: "Service account email mismatch" };
         }
         return { authenticated: true, identity: decoded.email };

@@ -44,6 +44,7 @@ const Login = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (loading) return; // Prevent duplicate concurrent submissions
     setLoading(true);
     setError("");
 
@@ -71,9 +72,8 @@ const Login = () => {
       navigate(redirectPath);
     } catch (err) {
       console.error("Login error:", err);
-      const msg = err.response?.data?.message || "Invalid email or password";
+      const msg = err.userMessage || err.response?.data?.message || err.message || "Invalid email or password";
       setError(msg);
-      // ❌ Removed alert — better UX to show inline error only
     } finally {
       setLoading(false);
     }

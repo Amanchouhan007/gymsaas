@@ -123,11 +123,11 @@ export const logAudit = async ({
         resolvedUserRole = resolvedUserRole || req.user.role || req.user.roleName;
         resolvedAdminId = resolvedAdminId || req.user.adminId || req.user.id;
       }
-      ipAddress = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || req.ip || null;
+      ipAddress = req?.headers?.["x-forwarded-for"] || req?.socket?.remoteAddress || req?.ip || null;
       if (ipAddress && ipAddress.includes(",")) {
         ipAddress = ipAddress.split(",")[0].trim();
       }
-      userAgent = req.headers["user-agent"] || null;
+      userAgent = req?.headers?.["user-agent"] || null;
       if (userAgent && userAgent.length > 250) {
         userAgent = userAgent.slice(0, 250);
       }

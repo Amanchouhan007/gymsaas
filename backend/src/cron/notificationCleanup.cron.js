@@ -52,14 +52,20 @@ export const initNotificationCleanupCron = () => {
       `);
 
       await connection.commit();
-      connection.release();
       console.log("✅ Nightly Notification Cleanup & Archiving successful.");
     } catch (err) {
       if (connection) {
-        await connection.rollback();
-        connection.release();
+        try {
+          await connection.rollback();
+        } catch (rbErr) {
+          console.error("⚠️ Rollback error in Notification Cleanup:", rbErr.message);
+        }
       }
       console.error("❌ Failed Nightly Notification Cleanup:", err);
+    } finally {
+      if (connection) {
+        connection.release();
+      }
     }
   });
 };

@@ -289,23 +289,6 @@ export const registerUser = async (data,payload) => {
 // };
 
 
-// Helper to ensure columns exist in user table safely
-let userColumnsEnsured = false;
-const ensureUserColumns = async () => {
-  if (userColumnsEnsured) return;
-  try {
-    await pool.query(`ALTER TABLE user ADD COLUMN isTrial TINYINT(1) DEFAULT 0`).catch(() => {});
-    await pool.query(`ALTER TABLE user ADD COLUMN licenseExpiryDate DATETIME DEFAULT NULL`).catch(() => {});
-    await pool.query(`ALTER TABLE user ADD COLUMN razorpayKeyId VARCHAR(255) DEFAULT NULL`).catch(() => {});
-    await pool.query(`ALTER TABLE user ADD COLUMN razorpayKeySecret VARCHAR(255) DEFAULT NULL`).catch(() => {});
-    await pool.query(`ALTER TABLE user ADD COLUMN trialStatus VARCHAR(50) DEFAULT 'None'`).catch(() => {});
-    userColumnsEnsured = true;
-  } catch (err) {}
-};
-
-// Trigger once in background
-ensureUserColumns();
-
 // ✅ service
 export const loginUser = async ({ email, password, bypassPassword = false }) => {
   if (!email || typeof email !== "string" || !email.trim()) {
@@ -315,10 +298,8 @@ export const loginUser = async ({ email, password, bypassPassword = false }) => 
   const cleanEmail = email.trim();
   const cleanPassword = password ? String(password).trim() : "";
 
-  await ensureUserColumns();
-
   /* ===============================
-     1️⃣ GET USER + ROLE + BRANCH
+     1️⃣ GET USER + ROLE + BRANCH (Fast Indexed Lookup)
   =============================== */
   const sql = `
     SELECT 
@@ -358,44 +339,14 @@ export const loginUser = async ({ email, password, bypassPassword = false }) => 
     }
   }
 
-  if (rows.length === 0) {
-    const cleanLower = cleanEmail.toLowerCase();
-    const isSuper = cleanLower.includes('superadmin') || cleanLower === 'test@test.com';
-    const isAdmin = (cleanLower.includes('admin') && !isSuper) || cleanLower === 'john@gmail.com';
-    
-    if (isSuper || isAdmin) {
-      try {
-        const defaultHash = await bcrypt.hash(cleanPassword || "123456", 10);
-        const targetRoleId = isSuper ? 1 : 2;
-        const targetName = isSuper ? 'Super Admin' : 'Admin Gym Owner';
-
-        await pool.query(
-          "INSERT INTO role (id, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE id=id",
-          [targetRoleId, isSuper ? 'Superadmin' : 'Admin']
-        ).catch(() => {});
-
-        await pool.query(
-          `INSERT INTO user (fullName, email, password, roleId, status, visiblePassword) 
-           VALUES (?, ?, ?, ?, 'Active', ?)`,
-          [targetName, cleanEmail, defaultHash, targetRoleId, cleanPassword || "123456"]
-        ).catch(() => {});
-
-        [rows] = await pool.query(sql, [cleanEmail]);
-      } catch (autoErr) {
-        console.error("Auto-heal admin error:", autoErr.message);
-      }
-    }
-  }
-
-  if (rows.length === 0) {
+  if (!rows || rows.length === 0) {
     throw { status: 401, message: "Invalid email or password" };
   }
 
   let user = null;
   let statusError = null;
 
-  // Since emails can be duplicated across tenants, we must find the first one that matches the password.
-  // We order by id DESC to prefer the most recently created account if passwords collide.
+  // Since emails can be duplicated across tenants, find the first matching active account
   for (const row of rows) {
     let match = bypassPassword;
     if (!match && row.password) {
@@ -404,28 +355,13 @@ export const loginUser = async ({ email, password, bypassPassword = false }) => 
       } catch (_) {
         match = false;
       }
+      // Backward compatibility: Auto-upgrade legacy plain text password to bcrypt
       if (!match && (row.password === cleanPassword || row.visiblePassword === cleanPassword)) {
         match = true;
-        // Auto-upgrade plain text password to bcrypt hash
         bcrypt.hash(cleanPassword, 10).then(hash => {
           pool.query("UPDATE user SET password = ? WHERE id = ?", [hash, row.id]).catch(() => {});
         }).catch(() => {});
       }
-    }
-
-    // ✅ FORCE SYNC FALLBACK FOR SUPERADMIN & MASTER ADMIN ACCOUNTS:
-    // If login is for superadmin/admin master accounts, auto-update DB hash to entered password & allow login
-    const rowEmail = (row.email || '').toLowerCase().trim();
-    const rowRole = (row.roleName || '').toLowerCase().trim();
-    if (!match && (rowEmail === 'superadmin@gmail.com' || rowEmail === 'test@test.com' || rowEmail === 'admin@gmail.com' || row.roleId === 1 || rowRole.includes('superadmin'))) {
-      match = true;
-      try {
-        const newHash = await bcrypt.hash(cleanPassword, 10);
-        await pool.query(
-          "UPDATE user SET password = ?, status = 'Active', visiblePassword = ? WHERE id = ?",
-          [newHash, cleanPassword, row.id]
-        );
-      } catch (err) {}
     }
 
     if (match) {
@@ -970,7 +906,7 @@ export const fetchDashboardStats = async () => {
 
 
 /**************************************
- * LOGIN MEMBER (NO BCRYPT)
+ * LOGIN MEMBER
  **************************************/
 export const loginMemberService = async ({ email, password, bypassPassword = false }) => {
   const sql = `
@@ -989,8 +925,25 @@ export const loginMemberService = async ({ email, password, bypassPassword = fal
     throw { status: 403, message: "Your account is inactive or suspended. Please contact support." };
   }
 
-  if (!bypassPassword && member.password !== password) {
-    throw { status: 401, message: "Invalid email or password" };
+  if (!bypassPassword) {
+    let match = false;
+    if (member.password) {
+      try {
+        match = await bcrypt.compare(String(password), String(member.password));
+      } catch (_) {
+        match = false;
+      }
+      // Backward compatibility: Auto-upgrade legacy plain text password to bcrypt
+      if (!match && member.password === String(password)) {
+        match = true;
+        bcrypt.hash(String(password), 10).then(hash => {
+          pool.query("UPDATE member SET password = ? WHERE id = ?", [hash, member.id]).catch(() => {});
+        }).catch(() => {});
+      }
+    }
+    if (!match) {
+      throw { status: 401, message: "Invalid email or password" };
+    }
   }
 
   const token = jwt.sign(

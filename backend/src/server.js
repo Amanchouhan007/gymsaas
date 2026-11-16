@@ -19,147 +19,74 @@ initNotificationCleanupCron();
 initOtpCleanupCron();
 initBackupCronJob();
 
-export async function syncAllUserAccounts() {
+import { seedDemoUsers } from "./seed/demoUsers.seed.js";
+export const syncAllUserAccounts = seedDemoUsers;
+
+/**
+ * Fast, atomic role initialization for production foreign keys
+ */
+export async function ensureEssentialSystemRoles() {
   try {
-    const defaultHash = await bcrypt.hash("123456", 10);
-    
-    // 0. Ensure default roles exist in `role` table to satisfy Foreign Key constraints
     const requiredRoles = [
-      { id: 1, name: "Superadmin" },
-      { id: 2, name: "Admin" },
-      { id: 3, name: "Subadmin" },
-      { id: 4, name: "Receptionist" },
-      { id: 5, name: "General Trainer" },
-      { id: 6, name: "Personal Trainer" },
-      { id: 7, name: "Sales Agent" },
-      { id: 8, name: "Member" },
-      { id: 9, name: "Housekeeping" }
+      [1, "Superadmin"],
+      [2, "Admin"],
+      [3, "Subadmin"],
+      [4, "Receptionist"],
+      [5, "General Trainer"],
+      [6, "Personal Trainer"],
+      [7, "Sales Agent"],
+      [8, "Member"],
+      [9, "Housekeeping"]
     ];
 
-    // Seed required roles safely if missing
-    for (const r of requiredRoles) {
-      await pool.query(
-        "INSERT INTO role (id, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name)",
-        [r.id, r.name]
-      ).catch(() => {});
-    }
-
-    // Helper to get or fallback role ID
-    const getRoleId = async (roleSearch, defaultId) => {
-      try {
-        const [r] = await pool.query("SELECT id FROM role WHERE LOWER(name) LIKE LOWER(?) LIMIT 1", [`%${roleSearch}%`]);
-        return r.length > 0 ? r[0].id : defaultId;
-      } catch (e) {
-        return defaultId;
-      }
-    };
-
-    const roleMap = {
-      superadmin: await getRoleId('superadmin', 1),
-      admin: await getRoleId('admin', 2),
-      subadmin: await getRoleId('subadmin', 3),
-      receptionist: await getRoleId('receptionist', 4),
-      generaltrainer: await getRoleId('general', 5),
-      personaltrainer: await getRoleId('personal', 6),
-      salesagent: await getRoleId('sales', 7),
-      member: await getRoleId('member', 8),
-      housekeeping: await getRoleId('housekeeping', 9)
-    };
-
-    const targetUsers = [
-      { name: 'Super Admin', email: 'superadmin@gmail.com', roleId: roleMap.superadmin },
-      { name: 'Super Admin Test', email: 'test@test.com', roleId: roleMap.superadmin },
-      { name: 'Admin Gym Owner', email: 'admin@gmail.com', roleId: roleMap.admin },
-      { name: 'John Admin', email: 'john@gmail.com', roleId: roleMap.admin },
-      { name: 'Pia Sub Admin', email: 'piasubadmin@gmail.com', roleId: roleMap.subadmin },
-      { name: 'Receptionist User', email: 'receptionist3@gmail.com', roleId: roleMap.receptionist },
-      { name: 'Personal Trainer User', email: 'personal3@gmail.com', roleId: roleMap.personaltrainer },
-      { name: 'General Trainer User', email: 'general1@gmail.com', roleId: roleMap.generaltrainer },
-      { name: 'Sneha Sales Agent', email: 'sneha@gmail.com', roleId: roleMap.salesagent },
-      { name: 'John Doe Member', email: 'john.doe@example.com', roleId: roleMap.member, isMember: true },
-      { name: 'Housekeeping User', email: 'housekeeping3@gmail.com', roleId: roleMap.housekeeping }
-    ];
-
-    for (const u of targetUsers) {
-      const [ex] = await pool.query("SELECT id FROM user WHERE LOWER(email) = LOWER(?)", [u.email]);
-      let userId;
-      if (ex.length === 0) {
-        const [ins] = await pool.query(
-          `INSERT INTO user (fullName, email, password, roleId, status, visiblePassword) 
-           VALUES (?, ?, ?, ?, 'Active', '123456')`,
-          [u.name, u.email, defaultHash, u.roleId]
-        );
-        userId = ins.insertId;
-        console.log(`✅ Created target user: ${u.email} (${u.name})`);
-      } else {
-        userId = ex[0].id;
-        // Do NOT overwrite user password if account already exists
-        await pool.query(
-          `UPDATE user SET status = 'Active', roleId = ? WHERE id = ?`,
-          [u.roleId, userId]
-        );
-      }
-
-      if (u.isMember) {
-        const [mEx] = await pool.query("SELECT id FROM member WHERE LOWER(email) = LOWER(?) OR userId = ?", [u.email, userId]);
-        if (mEx.length === 0) {
-          const [adminRows] = await pool.query("SELECT id FROM user WHERE roleId = 1 OR roleId = 2 LIMIT 1");
-          const adminId = adminRows.length > 0 ? adminRows[0].id : 1;
-          await pool.query(
-            `INSERT INTO member (userId, adminId, fullName, email, phone, status, password) 
-             VALUES (?, ?, ?, ?, '9999999999', 'ACTIVE', ?)`,
-            [userId, adminId, u.name, u.email, defaultHash]
-          );
-          console.log(`✅ Linked member record for ${u.email}`);
-        } else {
-          // Do NOT overwrite member password if already exists
-          await pool.query(
-            `UPDATE member SET status = 'ACTIVE' WHERE LOWER(email) = LOWER(?) OR userId = ?`,
-            [u.email, userId]
-          );
-        }
-      }
-    }
-    console.log("✅ All target roles & credentials synced successfully.");
+    await pool.query(
+      "INSERT INTO role (id, name) VALUES ? ON DUPLICATE KEY UPDATE name = VALUES(name)",
+      [requiredRoles]
+    );
+    console.log("✅ Essential system roles verified.");
   } catch (err) {
-    console.error("❌ User auto-sync error:", err.message);
+    console.error("⚠️ Roles initialization notice:", err.message);
   }
 }
 
 (async () => {
-  // ─── Auto-Sync SuperAdmin, Admin, Staff & All User Roles ───────────────────
-  await syncAllUserAccounts();
+  const startupStart = Date.now();
+
+  // 1. Essential System Roles Check (Fast single query)
+  await ensureEssentialSystemRoles();
+
+  // 2. Start HTTP Server Immediately to serve incoming traffic
   try {
-    await pool.query(`ALTER TABLE user 
-      ADD COLUMN trialStartDate DATETIME DEFAULT NULL,
-      ADD COLUMN trialEndDate DATETIME DEFAULT NULL,
-      ADD COLUMN trialStatus ENUM('Active', 'Expired', 'Converted', 'None') DEFAULT 'None',
-      ADD COLUMN gracePeriodEndDate DATETIME DEFAULT NULL;
-    `);
-    console.log("Trial columns added to user table successfully.");
-  } catch (e) {
-    if (e.code === 'ER_DUP_FIELDNAME') {
-      console.log("Trial columns already exist in user table.");
-    } else {
-      console.error("Failed to add trial columns:", e.message);
-    }
+    const server = app.listen(ENV.port, () => {
+      const startupDuration = Date.now() - startupStart;
+      console.log(`🚀 Server running on http://localhost:${ENV.port} (Startup completed in ${startupDuration}ms)`);
+    });
+
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${ENV.port} is already in use. Retrying in 1s...`);
+        setTimeout(() => {
+          server.close();
+          app.listen(ENV.port);
+        }, 1000);
+      } else {
+        console.error("Server startup error:", err);
+      }
+    });
+
+    // Initialize Socket.io
+    initSocket(server);
+
+    // Auto restore active WhatsApp sessions (non-blocking)
+    import("./modules/integrations/whatsapp.service.js")
+      .then(({ WhatsAppService }) => WhatsAppService.autoRestoreSessions())
+      .catch(e => console.error("WhatsApp auto restore error:", e.message));
+
+  } catch (err) {
+    console.error("Server listen error:", err);
   }
 
-  try {
-    await pool.query(`ALTER TABLE member 
-      ADD COLUMN trainerId INT DEFAULT NULL,
-      ADD COLUMN trainerType VARCHAR(255) DEFAULT NULL;
-    `);
-    console.log("Trainer columns added to member table successfully.");
-  } catch (e) {
-    if (e.code === 'ER_DUP_FIELDNAME') {
-      console.log("Trainer columns already exist in member table.");
-    } else {
-      console.error("Failed to add trainer columns to member table:", e.message);
-    }
-  }
-
-  // ─── Ensure equipment tables exist (safe: IF NOT EXISTS) ──────────────────
+  // 3. Optional Non-Blocking Background Table Checks
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS gym_equipment (
@@ -198,36 +125,9 @@ export async function syncAllUserAccounts() {
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
     `);
-    console.log("Equipment tables ready.");
   } catch (e) {
-    console.error("Equipment table setup error:", e.message);
+    console.error("Equipment table background setup notice:", e.message);
   }
-    try {
-      const server = app.listen(ENV.port, () => {
-        console.log(`Server running on http://localhost:${ENV.port}`);
-      });
-      server.on('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
-          console.error(`Port ${ENV.port} is already in use. Retrying in 1s...`);
-          setTimeout(() => {
-            server.close();
-            app.listen(ENV.port);
-          }, 1000);
-        } else {
-          console.error("Server startup error:", err);
-        }
-      });
-
-      // Initialize Socket.io
-      initSocket(server);
-
-      // Auto restore active WhatsApp sessions
-      import("./modules/integrations/whatsapp.service.js")
-        .then(({ WhatsAppService }) => WhatsAppService.autoRestoreSessions())
-        .catch(e => console.error("WhatsApp auto restore error:", e.message));
-    } catch (err) {
-      console.error("Server listen error:", err);
-    }
 })();
 
 process.on("unhandledRejection", (reason, promise) => {
